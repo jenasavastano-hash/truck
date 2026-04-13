@@ -1,0 +1,30 @@
+{
+  "name": "freight-epl-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "autoprefixer": "^10.4.13",
+    "axios": "^1.3.2",
+    "framer-motion": "^10.18.0",
+    "lucide-react": "^0.294.0",
+    "postcss": "^8.4.21",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.8.0",
+    "tailwindcss": "^3.2.7"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 3000",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 3000",
+
+    "netlify:login": "npx --yes netlify-cli login",
+    "netlify:link": "npx --yes netlify-cli link",
+    "deploy:preview": "npm run build && npx --yes netlify-cli deploy --dir=dist",
+    "deploy:prod": "npm run build && npx --yes netlify-cli deploy --dir=dist --prod"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^3.1.0",
+    "vite": "^4.1.0"
+  }
+}

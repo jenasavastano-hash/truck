@@ -1,0 +1,6 @@
+.env
+node_modules/
+*.log
+screenshots/
+qr-fetcher-profile/
+profiles/

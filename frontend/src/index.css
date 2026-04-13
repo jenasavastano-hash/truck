@@ -1,0 +1,271 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Тема «грузовые перевозки» */
+:root {
+  --freight-bg: #f8fafc;
+  --freight-ink: #0f172a;
+  --freight-accent: #0d9488;
+  --freight-accent-deep: #0f766e;
+  --freight-sky: #0369a1;
+  /* Сетка отступов (vault: VIZ) — в Tailwind дублируется как 1–4; здесь для custom CSS */
+  --freight-space-1: 0.25rem;
+  --freight-space-2: 0.5rem;
+  --freight-space-3: 0.75rem;
+  --freight-space-4: 1rem;
+  --freight-content-max: 80rem; /* max-w-7xl */
+  /* Кабинет водителя: единые «стеклянные» поверхности (day / night) */
+  --freight-driver-surface: rgba(255, 255, 255, 0.92);
+  --freight-driver-surface-night: rgba(15, 23, 42, 0.88);
+  --freight-driver-border: rgba(13, 148, 136, 0.22);
+  --freight-driver-border-night: rgba(51, 65, 85, 0.75);
+  /* iOS-подобное стекло (админ / операционные экраны) */
+  --freight-glass-night: rgba(15, 23, 42, 0.45);
+  --freight-glass-day: rgba(255, 255, 255, 0.52);
+  --freight-ios-hairline-night: rgba(255, 255, 255, 0.14);
+  --freight-ios-hairline-day: rgba(255, 255, 255, 0.72);
+}
+
+@keyframes freight-star-twinkle {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes freight-star-glow {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+    box-shadow:
+      0 0 10px 2px rgba(204, 251, 241, 0.45),
+      0 0 22px 4px rgba(45, 212, 191, 0.2);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.18);
+    box-shadow:
+      0 0 14px 3px rgba(255, 255, 255, 0.75),
+      0 0 28px 6px rgba(45, 212, 191, 0.35),
+      0 0 4px 1px rgba(255, 255, 255, 0.95);
+  }
+}
+
+@keyframes freight-star-dust {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 0.65;
+  }
+}
+
+.freight-star {
+  animation: freight-star-twinkle 4.2s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.freight-star-lg {
+  animation: freight-star-glow 5.5s ease-in-out infinite;
+  will-change: opacity, transform, box-shadow;
+}
+
+.freight-star-dust {
+  animation: freight-star-dust 5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .freight-star,
+  .freight-star-lg,
+  .freight-star-dust {
+    animation: none !important;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+main {
+  min-height: calc(100vh - 80px);
+  padding-bottom: 40px;
+}
+
+/* Страница входа: полный экран без полос от body/main */
+main.login-route-main {
+  min-height: 100dvh !important;
+  min-height: 100vh !important;
+  padding-bottom: 0 !important;
+}
+
+html {
+  background-color: #0f172a;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+}
+
+/* Страница входа: непрозрачный фон + жёсткий цвет текста (blur/стекло + autofill ломали контраст) */
+.login-page input.login-field.login-field-night,
+.login-page input.login-field.login-field-night:-webkit-autofill,
+.login-page input.login-field.login-field-night:-webkit-autofill:hover,
+.login-page input.login-field.login-field-night:-webkit-autofill:focus,
+.login-page input.login-field.login-field-night:disabled {
+  background-color: #1e293b !important;
+  color: #f8fafc !important;
+  -webkit-text-fill-color: #f8fafc !important;
+  caret-color: #2dd4bf;
+  opacity: 1;
+}
+
+.login-page input.login-field.login-field-night::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+  opacity: 1;
+}
+
+.login-page input.login-field.login-field-day,
+.login-page input.login-field.login-field-day:-webkit-autofill,
+.login-page input.login-field.login-field-day:-webkit-autofill:hover,
+.login-page input.login-field.login-field-day:-webkit-autofill:focus {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  -webkit-text-fill-color: #0f172a !important;
+  caret-color: #0d9488;
+}
+
+.login-page input.login-field.login-field-day::placeholder {
+  color: #64748b !important;
+  -webkit-text-fill-color: #64748b !important;
+  opacity: 1;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.freight-panel-bg {
+  background-color: #f1f5f9;
+  background-image:
+    linear-gradient(180deg, rgba(14, 116, 144, 0.06) 0%, transparent 42%),
+    linear-gradient(165deg, #f8fafc 0%, #e0f2fe 38%, #f1f5f9 72%, #e2e8f0 100%);
+}
+
+/* Мультяшные анимации (фоны кабинетов) */
+@keyframes cartoon-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes cartoon-wiggle {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(2deg);
+  }
+}
+
+@keyframes cartoon-bob {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) scale(1.02);
+  }
+}
+
+@keyframes cartoon-spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cartoon-float-slow {
+  animation: cartoon-float 4s ease-in-out infinite;
+}
+
+.cartoon-wiggle {
+  animation: cartoon-wiggle 2.5s ease-in-out infinite;
+}
+
+.cartoon-bob {
+  animation: cartoon-bob 2s ease-in-out infinite;
+}
+
+.cartoon-spin-slow {
+  animation: cartoon-spin-slow 18s linear infinite;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+form input,
+form textarea,
+form select {
+  transition: all 0.3s ease;
+}
+
+button {
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+/* VIZ: общие примитивы (постепенно вытесняют дубли tailwind-классов на экранах) */
+@layer components {
+  .freight-card {
+    @apply overflow-hidden rounded-2xl border border-slate-200/70 bg-white shadow-md;
+  }
+  .freight-btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors;
+    @apply bg-teal-600 hover:bg-teal-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  /* Компактная primary (тулбары, чипы «Рассылка») — к rounded добавьте rounded-full при необходимости */
+  .freight-btn-primary-compact {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors;
+    @apply bg-teal-600 hover:bg-teal-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .freight-btn-secondary {
+    @apply inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 shadow-sm transition-colors;
+    @apply hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-400;
+    @apply disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .freight-input {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400;
+    @apply focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20;
+  }
+}

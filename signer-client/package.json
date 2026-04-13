@@ -1,0 +1,28 @@
+{
+  "name": "epl-signer-client",
+  "version": "1.0.0",
+  "description": "Программа на ПК клиники: заявки на создание ЭПЛ + подпись титулов КриптоПро",
+  "private": true,
+  "main": "sign.js",
+  "scripts": {
+    "start": "node sign.js",
+    "once": "node sign.js --once",
+    "workers": "node run-workers.js",
+    "dispatcher": "node dispatcher-worker.js",
+    "medic": "node medic-worker.js",
+    "mechanic": "node mechanic-worker.js",
+    "qr": "node qr-fetcher.js",
+    "universal": "node universal-worker.js",
+    "build": "pkg . --targets node18-win-x64 --output EPL-Signer.exe"
+  },
+  "dependencies": {
+    "playwright-core": "^1.58.1"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [],
+    "outputPath": "dist"
+  }
+}

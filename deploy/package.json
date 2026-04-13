@@ -1,0 +1,9 @@
+{
+  "name": "taxi-deploy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Скрипт заливки бэка и фронта на сервер по SSH",
+  "dependencies": {
+    "ssh2": "^1.15.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "freight-epl",
+  "private": true,
+  "scripts": {
+    "frontend:install": "cd frontend && npm install",
+    "frontend:build": "cd frontend && npm run build",
+
+    "netlify:login": "cd frontend && npm run netlify:login",
+    "netlify:link": "cd frontend && npm run netlify:link",
+    "deploy:preview": "cd frontend && npm run deploy:preview",
+    "deploy:prod": "cd frontend && npm run deploy:prod"
+  }
+}

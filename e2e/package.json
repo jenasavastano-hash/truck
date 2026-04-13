@@ -1,0 +1,17 @@
+{
+  "name": "taxi-epl-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:driver": "playwright test driver-epl-flow",
+    "test:roles": "playwright test taxcom-login-screenshots",
+    "test:taxi": "playwright test taxi-app-flow",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "dotenv": "^16.3.1"
+  }
+}
