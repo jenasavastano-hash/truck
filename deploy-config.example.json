@@ -1,5 +1,13 @@
 {
   "host": "212.22.82.181",
   "port": 22,
-  "user": "root"
+  "user": "root",
+  "remoteBackendDir": "/root/backend",
+  "remoteFrontendDir": "/root/dist",
+  "remoteDbBackupsDir": "/root/db-backups",
+  "remoteTmpDir": "/tmp",
+  "pm2AppName": "freight-epl-api",
+  "nginxReload": true,
+  "privateKeyPath": "",
+  "keyPassphrase": ""
 }

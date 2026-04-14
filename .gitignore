@@ -63,6 +63,9 @@ cloudflared.exe
 # Deploy config (host/user — пароль не сохраняется)
 deploy-config.json
 
+# Локальный ключ для deploy (не в git)
+deploy/keys/
+
 # signer-client local state (do not commit)
 signer-client/profiles/
 signer-client/logs/

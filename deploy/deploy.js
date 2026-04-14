@@ -113,8 +113,38 @@ function loadConfig() {
 }
 
 function saveConfig(host, port, user) {
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ host, port, user }, null, 2), 'utf8');
+  const prev = loadConfig() || {};
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ ...prev, host, port, user }, null, 2), 'utf8');
   console.log('  Сохранено в deploy-config.json (пароль не сохраняем).\n');
+}
+
+/** Если в deploy-config.json задан privateKeyPath и файл есть — вход по ключу. */
+function tryLoadPrivateKey(saved) {
+  if (!saved || !saved.privateKeyPath || !String(saved.privateKeyPath).trim()) return null;
+  const keyRel = String(saved.privateKeyPath).trim();
+  const keyAbs = path.isAbsolute(keyRel) ? keyRel : path.join(ROOT, keyRel);
+  if (!fs.existsSync(keyAbs)) return null;
+  const privateKey = fs.readFileSync(keyAbs);
+  const passphrase = process.env.DEPLOY_KEY_PASSPHRASE;
+  return { privateKey, passphrase: passphrase ? String(passphrase) : undefined };
+}
+
+/** Пароль: приватный ключ из deploy-config → иначе DEPLOY_PASSWORD → иначе запрос. */
+async function getCredentialsForCli() {
+  const saved = loadConfig();
+  if (!saved || !saved.host || !saved.user) {
+    throw new Error('Создайте deploy-config.json (host, user, port) по образцу deploy-config.example.json.');
+  }
+  const port = parseInt(saved.port, 10) || 22;
+  const base = { host: saved.host, port, user: saved.user };
+  const fromKey = tryLoadPrivateKey(saved);
+  if (fromKey) return { ...base, ...fromKey };
+  let password = process.env.DEPLOY_PASSWORD;
+  if (password === undefined || password === '') {
+    password = await ask('Пароль SSH: ');
+  }
+  if (!password) throw new Error('Пароль не задан (DEPLOY_PASSWORD или ввод).');
+  return { ...base, password: String(password) };
 }
 
 async function getCredentials() {
@@ -122,6 +152,15 @@ async function getCredentials() {
   if (saved && saved.host && saved.user) {
     const use = await ask(`Использовать сохранённые данные? (${saved.user}@${saved.host}:${saved.port || 22}) [Д/н]: `);
     if (!use || use.toLowerCase() === 'д' || use.toLowerCase() === 'y' || use === '') {
+      const fromKey = tryLoadPrivateKey(saved);
+      if (fromKey) {
+        return {
+          host: saved.host,
+          port: parseInt(saved.port, 10) || 22,
+          user: saved.user,
+          ...fromKey,
+        };
+      }
       return {
         host: saved.host,
         port: parseInt(saved.port, 10) || 22,
@@ -146,16 +185,32 @@ async function getCredentials() {
 function connectSSH(creds) {
   return new Promise((resolve, reject) => {
     const conn = new Client();
-    conn.on('ready', () => resolve(conn)).on('error', reject);
-    conn.connect({
+    conn.on('ready', () => resolve(conn)).on('error', (err) => {
+      const msg = (err && err.message) ? err.message : String(err);
+      if (/ECONNRESET|Connection closed|handshake failed|kex_exchange/i.test(msg)) {
+        console.error(
+          '\n  Подсказка: соединение оборвалось до входа. Часто: не тот пользователь (ubuntu/debian вместо root), ' +
+            'вход только по ключу, fail2ban, или нестандартный порт SSH в панели VPS. ' +
+            'Проверьте веб-консоль хостинга и журнал: journalctl -u ssh\n'
+        );
+      }
+      reject(err);
+    });
+    const opts = {
       host: creds.host,
       port: creds.port,
       username: creds.user,
-      password: creds.password,
       readyTimeout: 20000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 5,
-    });
+    };
+    if (creds.privateKey) {
+      opts.privateKey = creds.privateKey;
+      if (creds.passphrase) opts.passphrase = creds.passphrase;
+    } else {
+      opts.password = creds.password;
+    }
+    conn.connect(opts);
   });
 }
 
@@ -262,16 +317,22 @@ function sftpDownload(conn, remotePath, localPath) {
 
 /* ──────── actions ──────── */
 
-async function actionFullDeploy(conn) {
+async function actionFullDeploy(conn, opts = {}) {
+  const skipBuild = !!opts.skipBuild;
   const backendPath = path.join(ROOT, 'backend');
   const frontendPath = path.join(ROOT, 'frontend');
   const distPath = path.join(frontendPath, 'dist');
 
   if (!fs.existsSync(backendPath)) throw new Error('Папка backend не найдена.');
 
-  console.log('\n1. Сборка фронта (API = /api)...');
-  await runLocal('npm', ['run', 'build'], frontendPath, 'npm run build', { VITE_API_URL: '' });
-  if (!fs.existsSync(distPath)) throw new Error('После сборки не найдена папка frontend/dist');
+  if (skipBuild) {
+    console.log('\n1. Сборка фронта пропущена (--skip-build), использую существующий frontend/dist...');
+    if (!fs.existsSync(distPath)) throw new Error('Нет frontend/dist. Соберите: cd frontend && npm run build');
+  } else {
+    console.log('\n1. Сборка фронта (API = /api)...');
+    await runLocal('npm', ['run', 'build'], frontendPath, 'npm run build', { VITE_API_URL: '' });
+    if (!fs.existsSync(distPath)) throw new Error('После сборки не найдена папка frontend/dist');
+  }
 
   console.log('\n2. Упаковка в архивы...');
   const backendTar = path.join(TMP_DIR, 'freight-backend.tar.gz');
@@ -336,13 +397,19 @@ async function actionFullDeploy(conn) {
   console.log('  Бэкапы БД: /root/db-backups/ (хранится до 10 последних)\n');
 }
 
-async function actionFrontendOnly(conn) {
+async function actionFrontendOnly(conn, opts = {}) {
+  const skipBuild = !!opts.skipBuild;
   const frontendPath = path.join(ROOT, 'frontend');
   const distPath = path.join(frontendPath, 'dist');
 
-  console.log('\n1. Сборка фронта (API = /api)...');
-  await runLocal('npm', ['run', 'build'], frontendPath, 'npm run build', { VITE_API_URL: '' });
-  if (!fs.existsSync(distPath)) throw new Error('После сборки не найдена папка frontend/dist');
+  if (skipBuild) {
+    console.log('\n1. Сборка пропущена (--skip-build), использую frontend/dist...');
+    if (!fs.existsSync(distPath)) throw new Error('Нет frontend/dist. Соберите: cd frontend && npm run build');
+  } else {
+    console.log('\n1. Сборка фронта (API = /api)...');
+    await runLocal('npm', ['run', 'build'], frontendPath, 'npm run build', { VITE_API_URL: '' });
+    if (!fs.existsSync(distPath)) throw new Error('После сборки не найдена папка frontend/dist');
+  }
 
   console.log('\n2. Упаковка dist...');
   const distTar = path.join(TMP_DIR, 'freight-dist.tar.gz');
@@ -439,7 +506,7 @@ async function actionUploadDB(conn) {
 
   // Перезапускаем
   console.log('\n  Запускаю backend...');
-  await runRemote(conn, 'pm2 start freight-epl-api 2>/dev/null || pm2 restart freight-epl-api; echo "pm2 restarted"', 'Перезапуск pm2');
+  await runRemote(conn, 'cd /root/backend && (pm2 restart freight-epl-api 2>/dev/null || (pm2 start server.js --name freight-epl-api && pm2 save)); echo "pm2 restarted"', 'Перезапуск pm2');
 
   console.log('\n  ✔ БД успешно залита на сервер и backend перезапущен.\n');
 }
@@ -484,7 +551,7 @@ async function actionRestoreDBFromServerBackup(conn) {
   ].join(' && '), 'Восстановление app.db');
 
   console.log('\n  Запускаю backend...');
-  await runRemote(conn, 'pm2 start freight-epl-api 2>/dev/null || pm2 restart freight-epl-api; echo "pm2 restarted"', 'Перезапуск pm2');
+  await runRemote(conn, 'cd /root/backend && (pm2 restart freight-epl-api 2>/dev/null || (pm2 start server.js --name freight-epl-api && pm2 save)); echo "pm2 restarted"', 'Перезапуск pm2');
 
   console.log('\n  ✔ Готово: БД восстановлена из бэкапа и backend перезапущен.\n');
 }
@@ -561,4 +628,43 @@ async function runMenu() {
   return runMenu();
 }
 
-runMenu().catch((e) => { console.error(e.message || e); process.exit(1); });
+function parseCliArgs() {
+  const argv = process.argv.slice(2);
+  return {
+    full: argv.includes('--full'),
+    frontendOnly: argv.includes('--frontend-only') || argv.includes('--frontend'),
+    restart: argv.includes('--restart-backend') || argv.includes('--restart'),
+    skipBuild: argv.includes('--skip-build'),
+  };
+}
+
+async function runCli() {
+  const flags = parseCliArgs();
+  let conn;
+  try {
+    const creds = await getCredentialsForCli();
+    conn = await connectSSH(creds);
+    if (flags.full) await actionFullDeploy(conn, { skipBuild: flags.skipBuild });
+    else if (flags.frontendOnly) await actionFrontendOnly(conn, { skipBuild: flags.skipBuild });
+    else if (flags.restart) await actionBackendRestart(conn);
+  } finally {
+    if (conn) conn.end();
+    rl.close();
+  }
+}
+
+async function main() {
+  const flags = parseCliArgs();
+  if (flags.full || flags.frontendOnly || flags.restart) {
+    try {
+      await runCli();
+    } catch (e) {
+      console.error('\n  Ошибка:', e.message || e);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+  await runMenu();
+}
+
+main().catch((e) => { console.error(e.message || e); process.exit(1); });

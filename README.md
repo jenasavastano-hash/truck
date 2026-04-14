@@ -53,6 +53,37 @@ npm run dev
 - Сводка API: `obsidian-vault/05 - API Contracts.md`
 - Smoke перед релизом: `docs/SMOKE.md`
 
+## Деплой backend + frontend на сервер
+
+Быстрый запуск (Windows, из корня проекта):
+
+```bat
+deploy-full.cmd ВАШ_ПАРОЛЬ_SSH
+```
+
+Скрипт берёт `host/port/user` из `deploy-config.json` и выполняет полный деплой:
+- сборка фронта (`frontend/dist`);
+- заливка `backend` (без `app.db`) и `dist` на сервер;
+- резервное копирование и восстановление серверной БД;
+- сохранение текущего `backend/.env` на сервере;
+- `nginx reload` и `pm2 restart`.
+
+Чтобы не затронуть другой сайт на том же сервере, задай отдельные пути/pm2-процесс в `deploy-config.json`:
+
+```json
+{
+  "host": "1.2.3.4",
+  "port": 22,
+  "user": "root",
+  "remoteBackendDir": "/srv/freight/backend",
+  "remoteFrontendDir": "/srv/freight/dist",
+  "remoteDbBackupsDir": "/srv/freight/db-backups",
+  "remoteTmpDir": "/tmp",
+  "pm2AppName": "freight-epl-api",
+  "nginxReload": true
+}
+```
+
 ## Legacy
 
 Отдельные имена в коде (старые префиксы localStorage, ассеты `taxi.png` в игре) постепенно выводятся; поведение для пользователя — грузовой домен. Крупные удаления — только после проверки сборки и сценариев.

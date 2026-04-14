@@ -266,6 +266,7 @@ async function applyFreightWaybillTaxcomFields(page, env) {
   const commercial = e.TAXCOM_COMMERCIAL_SHIPPING_LABEL || 'перевозка грузов';
   const tripStart = e.TAXCOM_TRIP_START_LABEL || 'парковк';
   const messageKind = e.TAXCOM_MESSAGE_KIND_LABEL || 'городск';
+  const shippingKind = (e.TAXCOM_SHIPPING_KIND_LABEL || '').trim();
 
   const commercialSelectors = [
     'select[name="COMMERCIAL_SHIPPING_TYPE"]',
@@ -288,9 +289,20 @@ async function applyFreightWaybillTaxcomFields(page, env) {
     'select[id*="message"]',
     'select[id*="AREA"]',
   ];
+  const shippingKindSelectors = [
+    'select[name="SHIPPING_KIND"]',
+    'select#shipping_kind',
+    '#SHIPPING_KIND',
+    'select[id*="shipping_kind"]',
+    'select[name*="SHIPPING_KIND"]',
+    'select[id*="SHIPPING"][id*="KIND"]',
+  ];
 
   await selectShippingTypeCategoryKpThenRunShipping(page, e);
   await selectOptionFirstMatch(page, commercialSelectors, commercial, 'Вид коммерческой перевозки (подтип)');
+  if (shippingKind) {
+    await selectOptionFirstMatch(page, shippingKindSelectors, shippingKind, 'Характер перевозки (грузовые / коммерч. и т.п.)');
+  }
   await selectOptionFirstMatch(page, tripStartSelectors, tripStart, 'Признак начала рейса');
   await selectOptionFirstMatch(page, messageKindSelectors, messageKind, 'Сведения о виде сообщения');
 }
