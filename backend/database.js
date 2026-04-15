@@ -195,58 +195,99 @@ const runMigrations = (callback) => {
 
     db.all(`PRAGMA table_info(managers)`, [], (err, mCols) => {
       if (err || !mCols) { onDone(); return; }
-      const add = (name, def) => {
-        if (mCols.some(c => c.name === name)) return;
-        try {
-          db.run(`ALTER TABLE managers ADD COLUMN ${name} INTEGER DEFAULT ${def}`);
-          console.log('Migrated managers: added ' + name);
-        } catch (e) {
-          console.warn('Failed to add managers.' + name, e.message);
-        }
+
+      const ensureManagersColumns = (cols) => {
+        const hasCol = (name) => cols.some((c) => c.name === name);
+        const queue = [];
+        const addInt = (name, def) => {
+          if (!hasCol(name)) queue.push({
+            sql: `ALTER TABLE managers ADD COLUMN ${name} INTEGER DEFAULT ${def}`,
+            label: name
+          });
+        };
+        const addText = (name, def) => {
+          if (!hasCol(name)) queue.push({
+            sql: `ALTER TABLE managers ADD COLUMN ${name} TEXT DEFAULT '${def}'`,
+            label: name
+          });
+        };
+
+        addInt('canTopupBalance', 0);
+        addInt('canFine', 0);
+        addInt('canDismiss', 0);
+        addInt('canDeleteDriver', 0);
+        addInt('canShowBalanceBreakdown', 0);
+        addInt('canAccessPhotoControl', 0);
+        addInt('canAccessStatistics', 0);
+        addInt('statsShowFinance', 1);
+        addInt('statsShowEpl', 1);
+        addInt('statsShowDrivers', 1);
+        // Статистика водителя (карточка водителя): видимость блоков
+        addInt('driverStatsShowBalance', 1);
+        addInt('driverStatsShowEpl', 1);
+        addInt('driverStatsShowShifts', 1);
+        // Доступы по ЭПЛ: просмотр логов и управление очередью QR
+        addInt('canViewEplLogs', 0);
+        addInt('canControlEplQueue', 0);
+        // Новые доступы по ЭПЛ: закрытие смен и скачивание документов
+        addInt('canCloseEplShifts', 0);
+        addInt('canChargeOnShiftClose', 0);
+        addInt('canDownloadEplDocs', 0);
+        // Доступ: смена пароля водителя (в карточке водителя)
+        addInt('canChangeDriverPassword', 0);
+        // Доступ: рассылки/мониторинг водителей (в менеджерке)
+        addInt('canAccessBroadcasts', 0);
+        // Доступ: Касса (финансовый дашборд)
+        addInt('canAccessFinance', 0);
+        addInt('financeShowKassa', 1);
+        addInt('financeShowSalary', 1);
+        addInt('financeShowParks', 1);
+        addInt('financeShowMonthly', 1);
+        addInt('financeScopeAll', 0);
+        addText('managerType', 'park');
+
+        if (queue.length === 0) { onDone(); return; }
+        let i = 0;
+        const runNext = () => {
+          if (i >= queue.length) {
+            db.run(`UPDATE managers SET managerType = 'park' WHERE managerType IS NULL OR managerType = ''`, () => onDone());
+            return;
+          }
+          const item = queue[i++];
+          db.run(item.sql, (e) => {
+            if (e) {
+              const msg = e.message || '';
+              if (!/duplicate column name/i.test(msg)) console.warn('Failed to add managers.' + item.label + ':', msg);
+            } else {
+              console.log('Migrated managers: added ' + item.label);
+            }
+            runNext();
+          });
+        };
+        runNext();
       };
-      add('canTopupBalance', 0);
-      add('canFine', 0);
-      add('canDismiss', 0);
-      add('canDeleteDriver', 0);
-      add('canShowBalanceBreakdown', 0);
-      add('canAccessPhotoControl', 0);
-      add('canAccessStatistics', 0);
-      add('statsShowFinance', 1);
-      add('statsShowEpl', 1);
-      add('statsShowDrivers', 1);
-      // Статистика водителя (карточка водителя): видимость блоков
-      add('driverStatsShowBalance', 1);
-      add('driverStatsShowEpl', 1);
-      add('driverStatsShowShifts', 1);
-      // Доступы по ЭПЛ: просмотр логов и управление очередью QR
-      add('canViewEplLogs', 0);
-      add('canControlEplQueue', 0);
-      // Новые доступы по ЭПЛ: закрытие смен и скачивание документов
-      add('canCloseEplShifts', 0);
-      add('canChargeOnShiftClose', 0);
-      add('canDownloadEplDocs', 0);
-      // Доступ: смена пароля водителя (в карточке водителя)
-      add('canChangeDriverPassword', 0);
-      // Доступ: рассылки/мониторинг водителей (в менеджерке)
-      add('canAccessBroadcasts', 0);
-      // Доступ: Касса (финансовый дашборд)
-      add('canAccessFinance', 0);
-      add('financeShowKassa', 1);
-      add('financeShowSalary', 1);
-      add('financeShowParks', 1);
-      add('financeShowMonthly', 1);
-      add('financeScopeAll', 0);
-      const addText = (name, def) => {
-        if (mCols.some(c => c.name === name)) return;
-        try {
-          db.run(`ALTER TABLE managers ADD COLUMN ${name} TEXT DEFAULT '${def}'`);
-          console.log('Migrated managers: added ' + name);
-        } catch (e) {
-          console.warn('Failed to add managers.' + name, e.message);
-        }
-      };
-      addText('managerType', 'park');
-      onDone();
+
+      if (mCols.length === 0) {
+        db.run(`
+          CREATE TABLE IF NOT EXISTS managers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            userId INTEGER NOT NULL UNIQUE,
+            parkId INTEGER NOT NULL,
+            createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(userId) REFERENCES users(id),
+            FOREIGN KEY(parkId) REFERENCES parks(id)
+          )
+        `, (createErr) => {
+          if (createErr) { onDone(); return; }
+          db.all(`PRAGMA table_info(managers)`, [], (e2, cols2) => {
+            if (e2 || !cols2) { onDone(); return; }
+            ensureManagersColumns(cols2);
+          });
+        });
+        return;
+      }
+
+      ensureManagersColumns(mCols);
     });
 
     // Таблица директоров парка (права как у менеджера, но по умолчанию всё включено)
@@ -2055,7 +2096,12 @@ const runMigrations = (callback) => {
   // Сначала восстановить parks (если переименована после сбоя), затем запустить миграции
   db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='parks'`, [], (err, parksRow) => {
     if (!err && parksRow) return runRest();
-    const recoverFrom = ['parks_old_unique_fix', 'parks_backup_takskornid'];
+    const recoverFrom = [
+      'parks_old_unique_fix',
+      'parks_backup_takskornid',
+      'parks_backup_taskskornid',
+      'parks_backup_taskskornil'
+    ];
     const tryRecover = (idx) => {
       if (idx >= recoverFrom.length) return runRest();
       const oldName = recoverFrom[idx];

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "fix:managers-columns": "node scripts/fix-managers-columns.js",
     "test:fast-pdf-smoke": "python -m py_compile worker_ep_l.py && node -e \"require('./services/fast-epl-pdf.js'); console.log('OK fast-epl-pdf')\"",
     "test:fast-pdf-freight": "python scripts/test-fast-pdf-freight.py"
   },

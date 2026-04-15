@@ -8,7 +8,6 @@ import ProfileMenu from '../components/driver/ProfileMenu';
 import DriverProfileModal from '../components/driver/DriverProfileModal';
 import { FileText, Bell, Gamepad2, Clock, FileCheck, AlertCircle, Truck, ShieldAlert, MessageCircle, Sun, Moon } from 'lucide-react';
 import FreightCinematicBackdrop from '../components/FreightCinematicBackdrop';
-import FreightEplHint from '../components/driver/FreightEplHint';
 import DriverCreateEplFreightFields from '../components/driver/DriverCreateEplFreightFields';
 import { parseUtc, formatDateMsk, formatNotificationTime } from '../utils/dateFormatter';
 import { FEATURE_EVACUATOR_AND_COMMISSIONER } from '../config/features';
@@ -876,7 +875,6 @@ export default function DriverPortal() {
               photoControlStatus={photoControlStatus}
               onPhotoControlClick={() => navigate('/driver/photo-control')}
             />
-            <FreightEplHint night={sceneNight} />
             </div>
 
             {/* Эвакуатор */}

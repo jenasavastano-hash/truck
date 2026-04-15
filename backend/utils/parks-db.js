@@ -22,34 +22,64 @@ const PARKS_SCHEMA = `
 `;
 
 function dropParksOldUniqueFixRefs(callback) {
-  const badTable = 'parks_old_unique_fix';
-  db.all(`SELECT type, name FROM sqlite_master WHERE (type='trigger' OR type='view') AND sql LIKE ?`, ['%' + badTable + '%'], (err, rows) => {
-    if (err || !rows || rows.length === 0) {
+  const badRefs = [
+    'parks_old_unique_fix',
+    'parks_backup_takskornid',
+    'parks_backup_taskskornid',
+    'parks_backup_taskskornil'
+  ];
+  const refs = Array.from(new Set(badRefs));
+  let idx = 0;
+
+  const processNext = () => {
+    if (idx >= refs.length) {
       ensureParksOldUniqueFixStub(callback);
       return;
     }
-    let n = 0;
-    const done = () => {
-      n++;
-      if (n >= rows.length) ensureParksOldUniqueFixStub(callback);
-    };
-    rows.forEach((r) => {
-      db.run(`DROP ${r.type.toUpperCase()} IF EXISTS ${r.name}`, () => done());
-    });
-  });
+    const badTable = refs[idx++];
+    db.all(
+      `SELECT type, name FROM sqlite_master WHERE (type='trigger' OR type='view') AND sql LIKE ?`,
+      ['%' + badTable + '%'],
+      (err, rows) => {
+        if (err || !rows || rows.length === 0) {
+          processNext();
+          return;
+        }
+        let n = 0;
+        const done = () => {
+          n++;
+          if (n >= rows.length) processNext();
+        };
+        rows.forEach((r) => {
+          db.run(`DROP ${r.type.toUpperCase()} IF EXISTS ${r.name}`, () => done());
+        });
+      }
+    );
+  };
+
+  processNext();
 }
 
 function ensureParksOldUniqueFixStub(callback) {
-  db.get(`SELECT name FROM sqlite_master WHERE type='table' AND name='parks_old_unique_fix'`, [], (err, row) => {
-    if (!err && row) return callback();
-    db.run(
-      `CREATE TABLE IF NOT EXISTS parks_old_unique_fix (${PARKS_SCHEMA})`,
-      (e) => {
-        if (!e) console.log('[parks-db] Created parks_old_unique_fix stub table');
-        callback();
-      }
-    );
-  });
+  const stubTables = [
+    'parks_old_unique_fix',
+    'parks_backup_takskornid',
+    'parks_backup_taskskornid',
+    'parks_backup_taskskornil'
+  ];
+  let i = 0;
+  const ensureOne = () => {
+    if (i >= stubTables.length) {
+      callback();
+      return;
+    }
+    const t = stubTables[i++];
+    db.run(`CREATE TABLE IF NOT EXISTS ${t} (${PARKS_SCHEMA})`, (e) => {
+      if (!e) console.log('[parks-db] Ensured stub table:', t);
+      ensureOne();
+    });
+  };
+  ensureOne();
 }
 
 /**
@@ -76,10 +106,14 @@ function ensureParksTable(callback) {
       });
     };
     tryRename('parks_backup_takskornid', () => {
+      tryRename('parks_backup_taskskornid', () => {
+        tryRename('parks_backup_taskskornil', () => {
       tryRename('parks_old_unique_fix', () => {
         db.run(`CREATE TABLE IF NOT EXISTS parks (${PARKS_SCHEMA})`, (e3) => {
           if (!e3) console.log('[parks-db] Created minimal parks table');
           dropParksOldUniqueFixRefs(() => callback());
+        });
+      });
         });
       });
     });
