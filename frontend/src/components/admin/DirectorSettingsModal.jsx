@@ -33,6 +33,18 @@ export default function DirectorSettingsModal({ director, parkId, isOpen, onClos
     canCloseEplShifts: true,
     canChargeOnShiftClose: true,
     canDownloadEplDocs: true,
+    canManageParkSettings: false,
+    canParkSettingsStatusName: false,
+    canParkSettingsTakskom: false,
+    canParkSettingsStaff: false,
+    canParkSettingsFreight: false,
+    canParkSettingsBroadcasts: false,
+    canParkSettingsOwners: false,
+    canParkSettingsBalance: false,
+    canParkSettingsPricing: false,
+    canParkSettingsGame: false,
+    canParkSettingsPhotoControl: false,
+    canParkSettingsServices: false,
     canChangeDriverPassword: true,
     canAccessBroadcasts: true,
     canAccessFinance: false,
@@ -73,6 +85,18 @@ export default function DirectorSettingsModal({ director, parkId, isOpen, onClos
         canCloseEplShifts: director.canCloseEplShifts !== 0 && director.canCloseEplShifts !== false,
         canChargeOnShiftClose: director.canChargeOnShiftClose !== 0 && director.canChargeOnShiftClose !== false,
         canDownloadEplDocs: director.canDownloadEplDocs !== 0 && director.canDownloadEplDocs !== false,
+        canManageParkSettings: !!director.canManageParkSettings,
+        canParkSettingsStatusName: !!director.canParkSettingsStatusName,
+        canParkSettingsTakskom: !!director.canParkSettingsTakskom,
+        canParkSettingsStaff: !!director.canParkSettingsStaff,
+        canParkSettingsFreight: !!director.canParkSettingsFreight,
+        canParkSettingsBroadcasts: !!director.canParkSettingsBroadcasts,
+        canParkSettingsOwners: !!director.canParkSettingsOwners,
+        canParkSettingsBalance: !!director.canParkSettingsBalance,
+        canParkSettingsPricing: !!director.canParkSettingsPricing,
+        canParkSettingsGame: !!director.canParkSettingsGame,
+        canParkSettingsPhotoControl: !!director.canParkSettingsPhotoControl,
+        canParkSettingsServices: !!director.canParkSettingsServices,
         canChangeDriverPassword: director.canChangeDriverPassword !== 0 && director.canChangeDriverPassword !== false,
         canAccessBroadcasts: director.canAccessBroadcasts !== 0 && director.canAccessBroadcasts !== false,
         canAccessFinance: !!director.canAccessFinance,
@@ -128,7 +152,23 @@ export default function DirectorSettingsModal({ director, parkId, isOpen, onClos
     if (!director) return;
     setSaving(true);
     try {
-      await api.put(`/admin/directors/${director.id}/permissions`, permissions);
+      const hasAnyParkSettingsPermission = !!(
+        permissions.canParkSettingsStatusName ||
+        permissions.canParkSettingsTakskom ||
+        permissions.canParkSettingsStaff ||
+        permissions.canParkSettingsFreight ||
+        permissions.canParkSettingsBroadcasts ||
+        permissions.canParkSettingsOwners ||
+        permissions.canParkSettingsBalance ||
+        permissions.canParkSettingsPricing ||
+        permissions.canParkSettingsGame ||
+        permissions.canParkSettingsPhotoControl ||
+        permissions.canParkSettingsServices
+      );
+      await api.put(`/admin/directors/${director.id}/permissions`, {
+        ...permissions,
+        canManageParkSettings: hasAnyParkSettingsPermission,
+      });
       onSave?.();
       onClose?.();
     } catch (e) {
@@ -371,6 +411,76 @@ export default function DirectorSettingsModal({ director, parkId, isOpen, onClos
                 <div className="font-semibold text-slate-800">📎 Скачивать документы ЭПЛ</div>
               </div>
             </label>
+            <div className="border-2 border-emerald-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 bg-emerald-50/60 border-b border-emerald-200">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!!(
+                      permissions.canParkSettingsStatusName ||
+                      permissions.canParkSettingsTakskom ||
+                      permissions.canParkSettingsStaff ||
+                      permissions.canParkSettingsFreight ||
+                      permissions.canParkSettingsBroadcasts ||
+                      permissions.canParkSettingsOwners ||
+                      permissions.canParkSettingsBalance ||
+                      permissions.canParkSettingsPricing ||
+                      permissions.canParkSettingsGame ||
+                      permissions.canParkSettingsPhotoControl ||
+                      permissions.canParkSettingsServices
+                    )}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setPermissions({
+                        ...permissions,
+                        canManageParkSettings: next,
+                        canParkSettingsStatusName: next,
+                        canParkSettingsTakskom: next,
+                        canParkSettingsStaff: next,
+                        canParkSettingsFreight: next,
+                        canParkSettingsBroadcasts: next,
+                        canParkSettingsOwners: next,
+                        canParkSettingsBalance: next,
+                        canParkSettingsPricing: next,
+                        canParkSettingsGame: next,
+                        canParkSettingsPhotoControl: next,
+                        canParkSettingsServices: next,
+                      });
+                    }}
+                    className="mt-1 w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <div className="flex-1">
+                    <div className="font-semibold text-slate-800">⚙️ Настройки парка</div>
+                    <p className="text-xs text-slate-500 mt-0.5">Включает вкладку «Настройки». Ниже — точечные права по каждому блоку.</p>
+                  </div>
+                </label>
+              </div>
+              <div className="px-4 py-3 bg-white space-y-2">
+                {[
+                  { key: 'canParkSettingsStatusName', label: 'Статус и название парка' },
+                  { key: 'canParkSettingsTakskom', label: 'Привязка к Такском + режим печати ЭПЛ' },
+                  { key: 'canParkSettingsStaff', label: 'Персонал Такском' },
+                  { key: 'canParkSettingsFreight', label: 'Грузовой рейс: адреса + точки выгрузки' },
+                  { key: 'canParkSettingsBroadcasts', label: 'Рассылки (маршрутизация ответов)' },
+                  { key: 'canParkSettingsOwners', label: 'Организации (владельцы ТС)' },
+                  { key: 'canParkSettingsBalance', label: 'Порядок списания баланса' },
+                  { key: 'canParkSettingsPricing', label: 'Реквизиты и цены автопарка' },
+                  { key: 'canParkSettingsGame', label: 'Настройки игры' },
+                  { key: 'canParkSettingsPhotoControl', label: 'Фотоконтроль' },
+                  { key: 'canParkSettingsServices', label: 'Эвакуатор и Комиссар' },
+                ].map(({ key, label }) => (
+                  <label key={key} className="flex items-center gap-2.5 cursor-pointer hover:bg-slate-50 rounded-lg px-2 py-1.5 transition">
+                    <input
+                      type="checkbox"
+                      checked={!!permissions[key]}
+                      onChange={(e) => setPermissions({ ...permissions, [key]: e.target.checked, canManageParkSettings: true })}
+                      className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <span className="text-sm text-slate-700">{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
 
             <div className="border-2 border-violet-200 rounded-xl overflow-hidden">
               <label className="flex items-start gap-3 p-4 cursor-pointer transition-all hover:bg-violet-50 bg-violet-50/50">

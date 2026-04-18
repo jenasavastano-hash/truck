@@ -37,8 +37,24 @@ const EMPTY_OWNER = {
   locality: '', street: '', house: '', housing: '', flat: '', isDefault: false
 };
 
-export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
+export default function ParkSettingsModal({ park, isOpen, onClose, onSave, apiPrefix = 'admin', canDeletePark = true, settingsPermissions = null }) {
   const { showToast } = useToast();
+  const apiRoot = `/${apiPrefix}`;
+  const isAdminApi = apiPrefix === 'admin';
+  const access = {
+    statusName: isAdminApi || !!settingsPermissions?.canParkSettingsStatusName,
+    takskom: isAdminApi || !!settingsPermissions?.canParkSettingsTakskom,
+    staff: isAdminApi || !!settingsPermissions?.canParkSettingsStaff,
+    freight: isAdminApi || !!settingsPermissions?.canParkSettingsFreight,
+    broadcasts: isAdminApi || !!settingsPermissions?.canParkSettingsBroadcasts,
+    owners: isAdminApi || !!settingsPermissions?.canParkSettingsOwners,
+    balance: isAdminApi || !!settingsPermissions?.canParkSettingsBalance,
+    pricing: isAdminApi || !!settingsPermissions?.canParkSettingsPricing,
+    game: isAdminApi || !!settingsPermissions?.canParkSettingsGame,
+    photoControl: isAdminApi || !!settingsPermissions?.canParkSettingsPhotoControl,
+    services: isAdminApi || !!settingsPermissions?.canParkSettingsServices,
+  };
+  const canEditAnything = Object.values(access).some(Boolean);
   const [balanceDeductionOrder, setBalanceDeductionOrder] = useState('real_first');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -49,6 +65,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
   const [eplPrice, setEplPrice] = useState(25);
   const [autoClosePrice, setAutoClosePrice] = useState(10);
   const [eplPrintMode, setEplPrintMode] = useState('our_then_taxcom');
+  const [eplAccessMode, setEplAccessMode] = useState('all');
   /** Кто вводит адреса грузового рейса (отправление / погрузка / выгрузки): водитель при создании ЭПЛ или диспетчер/менеджер в ЛК Такском */
   const [freightAddressEntryMode, setFreightAddressEntryMode] = useState('manager');
   /** Одна строка на поле — подставляются водителю при создании ЭПЛ (режим «водитель вводит адреса»), можно править перед отправкой */
@@ -99,7 +116,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
   const loadOwners = () => {
     if (!park) return;
     setOwnersLoading(true);
-    api.get(`/admin/parks/${park.id}/owners`)
+    api.get(`${apiRoot}/parks/${park.id}/owners`)
       .then(r => setOwners(r.data || []))
       .catch(() => setOwners([]))
       .finally(() => setOwnersLoading(false));
@@ -114,7 +131,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
   const loadStaff = () => {
     if (!park) return;
     setStaffLoading(true);
-    api.get(`/admin/parks/${park.id}/staff`)
+    api.get(`${apiRoot}/parks/${park.id}/staff`)
       .then(r => {
         const existing = r.data || [];
         const merged = STAFF_ROLES.map(sr => {
@@ -131,7 +148,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
     if (!park) return;
     setStaffSaving(true);
     try {
-      await api.post(`/admin/parks/${park.id}/staff`, staffItem);
+      await api.post(`${apiRoot}/parks/${park.id}/staff`, staffItem);
       showToast(`Сотрудник "${STAFF_ROLES.find(r => r.role === staffItem.role)?.label}" сохранён`, 'success');
       loadStaff();
     } catch (e) {
@@ -147,10 +164,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
 
   useEffect(() => {
     if (isOpen && park) {
-      loadOwners();
-      loadStaff();
+      if (access.owners) loadOwners();
+      if (access.staff) loadStaff();
     }
-  }, [isOpen, park]);
+  }, [isOpen, park, access.owners, access.staff]);
 
   const openOwnerModal = (owner = null) => {
     setEditingOwner(owner);
@@ -163,10 +180,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
     setOwnerSaving(true);
     try {
       if (editingOwner) {
-        await api.put(`/admin/parks/${park.id}/owners/${editingOwner.id}`, ownerForm);
+        await api.put(`${apiRoot}/parks/${park.id}/owners/${editingOwner.id}`, ownerForm);
         showToast('Владелец обновлён', 'success');
       } else {
-        await api.post(`/admin/parks/${park.id}/owners`, ownerForm);
+        await api.post(`${apiRoot}/parks/${park.id}/owners`, ownerForm);
         showToast('Владелец добавлен', 'success');
       }
       loadOwners();
@@ -181,7 +198,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
   const handleDeleteOwner = async (id) => {
     if (!window.confirm('Удалить владельца?')) return;
     try {
-      await api.delete(`/admin/parks/${park.id}/owners/${id}`);
+      await api.delete(`${apiRoot}/parks/${park.id}/owners/${id}`);
       showToast('Владелец удалён', 'success');
       loadOwners();
     } catch (e) {
@@ -193,7 +210,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
     setAllOwnersLoading(true);
     setImportModalOpen(true);
     setAllOwnersSearch('');
-    api.get('/admin/owners/all')
+    api.get(`${apiRoot}/owners/all`)
       .then(r => {
         const filtered = (r.data || []).filter(o => o.parkId !== park.id);
         setAllOwners(filtered);
@@ -222,24 +239,33 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
   }, [isOpen, park]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !access.takskom) return;
     setCarParksLoading(true);
-    api.get('/admin/takskom/carparks')
+    api.get(`${apiRoot}/takskom/carparks`)
       .then((res) => setCarParks(res.data?.carParks || []))
       .catch(() => setCarParks([]))
       .finally(() => setCarParksLoading(false));
-  }, [isOpen]);
+  }, [isOpen, access.takskom]);
 
   const loadParkSettings = async () => {
     if (!park) return;
     try {
-      const res = await api.get(`/admin/parks/${park.id}/settings`);
+      const res = isAdminApi
+        ? await api.get(`${apiRoot}/parks/${park.id}/settings`)
+        : await api.get(`${apiRoot}/park/settings`, { params: { parkId: park.id } });
       setBalanceDeductionOrder(res.data?.balanceDeductionOrder || 'real_first');
       setIsActive(res.data?.isActive || false);
       setTakskornId(res.data?.takskornId != null ? String(res.data.takskornId) : '');
       setEplPrice(res.data?.eplPrice ?? 25);
       setAutoClosePrice(res.data?.autoClosePrice ?? 10);
       setEplPrintMode(res.data?.eplPrintMode || 'our_then_taxcom');
+      setEplAccessMode(
+        res.data?.eplAccessMode === 'driver_only'
+          ? 'driver_only'
+          : res.data?.eplAccessMode === 'manager_director_only'
+            ? 'manager_director_only'
+            : 'all'
+      );
       setFreightAddressEntryMode(res.data?.freightAddressEntryMode === 'driver' ? 'driver' : 'manager');
       setFreightDefaultOriginAddress(res.data?.freightDefaultOriginAddress != null ? String(res.data.freightDefaultOriginAddress) : '');
       setFreightDefaultLoadAddress(res.data?.freightDefaultLoadAddress != null ? String(res.data.freightDefaultLoadAddress) : '');
@@ -270,14 +296,14 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
         setPhotoControlNotifyHoursBefore(res.data?.photoControlNotifyHoursBefore ?? 24);
       }
       setBroadcastRepliesRouting(res.data?.broadcastRepliesRouting === 'sender' ? 'sender' : 'park');
-      if (FEATURE_EVACUATOR_AND_COMMISSIONER) {
+      if (FEATURE_EVACUATOR_AND_COMMISSIONER && access.services) {
         try {
-          const evRes = await api.get(`/admin/parks/${park.id}/evacuator-settings`);
+          const evRes = await api.get(`${apiRoot}/parks/${park.id}/evacuator-settings`);
           setEvacuatorEnabled(!!evRes.data?.evacuatorEnabled);
           setEvacuatorRequestPriceOverride(evRes.data?.requestPriceOverride != null ? String(evRes.data.requestPriceOverride) : '');
         } catch (_) {}
         try {
-          const cRes = await api.get(`/admin/parks/${park.id}/commissioner-settings`);
+          const cRes = await api.get(`${apiRoot}/parks/${park.id}/commissioner-settings`);
           setCommissionerEnabled(!!cRes.data?.commissionerEnabled);
           setCommissionerRequestPriceOverride(cRes.data?.requestPriceOverride != null ? String(cRes.data.requestPriceOverride) : '');
         } catch (_) {}
@@ -297,55 +323,73 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
       showToast('Парк не выбран', 'error');
       return;
     }
+    if (!canEditAnything) {
+      showToast('Нет прав на изменение настроек', 'error');
+      return;
+    }
     
     setSaving(true);
     try {
-      if (FEATURE_EVACUATOR_AND_COMMISSIONER) {
-        await api.put(`/admin/parks/${park.id}/evacuator-settings`, {
+      if (FEATURE_EVACUATOR_AND_COMMISSIONER && access.services) {
+        await api.put(`${apiRoot}/parks/${park.id}/evacuator-settings`, {
           evacuatorEnabled,
           requestPriceOverride: evacuatorRequestPriceOverride === '' ? null : (parseFloat(evacuatorRequestPriceOverride) || null)
         }).catch(() => {});
-        await api.put(`/admin/parks/${park.id}/commissioner-settings`, {
+        await api.put(`${apiRoot}/parks/${park.id}/commissioner-settings`, {
           commissionerEnabled,
           requestPriceOverride: commissionerRequestPriceOverride === '' ? null : (parseFloat(commissionerRequestPriceOverride) || null)
         }).catch(() => {});
       }
 
-      const response = await api.put(`/admin/parks/${park.id}/settings`, {
-        eplCreationMode: 'clinic_api',
-        name: parkName.trim() || park.name,
-        balanceDeductionOrder: balanceDeductionOrder,
-        eplPrintMode: eplPrintMode,
-        isActive: isActive ? 1 : 0,
-        takskornId: takskornId && String(takskornId).trim() ? String(takskornId).trim() : null,
-        eplPrice: Number(eplPrice) || 25,
-        autoClosePrice: Number(autoClosePrice) || 10,
-        photoControlEnabled: photoControlEnabled,
-        photoControlPrice: Number(photoControlPrice) || 150,
-        photoControlValidDays: Number(photoControlValidDays) || 10,
-        photoControlNotifyHoursBefore: Number(photoControlNotifyHoursBefore) || 24,
-        broadcastRepliesRouting,
-        freightAddressEntryMode,
-        freightDefaultOriginAddress: freightDefaultOriginAddress.trim() || null,
-        freightDefaultLoadAddress: freightDefaultLoadAddress.trim() || null,
-        gameEnabled: gameEnabled,
-        leaderboardDefault: leaderboardDefault,
-        rewardsEnabled: rewardsEnabled,
-        gameShopConfig: {
+      const payload = { eplCreationMode: 'clinic_api' };
+      if (access.statusName) {
+        payload.name = parkName.trim() || park.name;
+        payload.isActive = isActive ? 1 : 0;
+      }
+      if (access.takskom) {
+        payload.eplPrintMode = eplPrintMode;
+        payload.eplAccessMode = eplAccessMode;
+        payload.takskornId = takskornId && String(takskornId).trim() ? String(takskornId).trim() : null;
+      }
+      if (access.balance) payload.balanceDeductionOrder = balanceDeductionOrder;
+      if (access.pricing) {
+        payload.eplPrice = Number(eplPrice) || 25;
+        payload.autoClosePrice = Number(autoClosePrice) || 10;
+      }
+      if (access.photoControl) {
+        payload.photoControlEnabled = photoControlEnabled;
+        payload.photoControlPrice = Number(photoControlPrice) || 150;
+        payload.photoControlValidDays = Number(photoControlValidDays) || 10;
+        payload.photoControlNotifyHoursBefore = Number(photoControlNotifyHoursBefore) || 24;
+      }
+      if (access.broadcasts) payload.broadcastRepliesRouting = broadcastRepliesRouting;
+      if (access.freight) {
+        payload.freightAddressEntryMode = freightAddressEntryMode;
+        payload.freightDefaultOriginAddress = freightDefaultOriginAddress.trim() || null;
+        payload.freightDefaultLoadAddress = freightDefaultLoadAddress.trim() || null;
+      }
+      if (access.game) {
+        payload.gameEnabled = gameEnabled;
+        payload.leaderboardDefault = leaderboardDefault;
+        payload.rewardsEnabled = rewardsEnabled;
+        payload.gameShopConfig = {
           currencyType: gameShopCurrencyType,
           magnet: Math.max(0, parseInt(gameShopMagnet, 10) || 0),
           nitro: Math.max(0, parseInt(gameShopNitro, 10) || 0),
           jump: Math.max(0, parseInt(gameShopJump, 10) || 0),
           extra_life: Math.max(0, parseInt(gameShopExtraLife, 10) || 0)
-        },
-        gameRewards: gameRewards.map(r => ({
+        };
+        payload.gameRewards = gameRewards.map(r => ({
           position: parseInt(r.position, 10) || 1,
           rewardType: r.rewardType || 'free_epl',
           freeEplCount: r.rewardType === 'free_epl' ? (parseInt(r.freeEplCount, 10) || 0) : 0,
           discountPercent: r.rewardType === 'discount' ? (parseInt(r.discountPercent, 10) || 0) : 0,
           discountEplCount: r.rewardType === 'discount' ? (parseInt(r.discountEplCount, 10) || 0) : 0
-        }))
-      });
+        }));
+      }
+      const response = isAdminApi
+        ? await api.put(`${apiRoot}/parks/${park.id}/settings`, payload)
+        : await api.put(`${apiRoot}/park/settings`, payload, { params: { parkId: park.id } });
       if (response.data?.eplPrice != null) setEplPrice(response.data.eplPrice);
       if (response.data?.autoClosePrice != null) setAutoClosePrice(response.data.autoClosePrice);
       if (response.data?.photoControlEnabled !== undefined) setPhotoControlEnabled(!!response.data.photoControlEnabled);
@@ -385,7 +429,13 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
         className="max-h-[95vh] sm:max-h-[90vh] !max-w-[calc(100vw-1rem)] sm:!max-w-2xl"
       >
         <div className="space-y-3 sm:space-y-4">
+          {!canEditAnything && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+              У директора нет выданных прав на редактирование блоков настроек этого парка.
+            </div>
+          )}
           {/* Статус парка - остаётся сверху без гармошки */}
+          {access.statusName && (
           <div className="bg-slate-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border border-slate-200">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -407,8 +457,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </label>
             </div>
           </div>
+          )}
 
           {/* Название парка */}
+          {access.statusName && (
           <div className="bg-slate-50 rounded-lg sm:rounded-xl p-3 sm:p-5 border border-slate-200">
             <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-1.5">Название парка</label>
             <input
@@ -419,8 +471,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               className="w-full px-3 py-2.5 text-sm border-2 border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition bg-white"
             />
           </div>
+          )}
 
           {/* Привязка к Такском - гармошка */}
+          {access.takskom && (
           <SettingsAccordion title="Привязка к Такском" icon={Link2} iconBg="bg-violet-100 text-violet-600">
             {/* Индикатор синхронизации */}
             <div className="mb-4 flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm">
@@ -480,8 +534,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             </div>
           </SettingsAccordion>
+          )}
 
           {/* Персонал Такском */}
+          {access.staff && (
           <SettingsAccordion title="Персонал Такском" icon={Users} iconBg="bg-teal-100 text-teal-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-4">
               Логины и пароли сотрудников для автоматического входа в ЛК Такском при создании/подписи ЭПЛ.
@@ -561,6 +617,24 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
                             <label className="block text-xs font-semibold text-slate-600 mb-1">Номер лицензии</label>
                             <input type="text" value={s.licenseNumber || ''} onChange={(e) => updateStaffField(role, 'licenseNumber', e.target.value)} placeholder="" className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500" />
                           </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 mb-1">Дата начала действия</label>
+                            <input
+                              type="date"
+                              value={s.licenseDateStart || ''}
+                              onChange={(e) => updateStaffField(role, 'licenseDateStart', e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-600 mb-1">Дата окончания действия</label>
+                            <input
+                              type="date"
+                              value={s.licenseDateEnd || ''}
+                              onChange={(e) => updateStaffField(role, 'licenseDateEnd', e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
                         </div>
                       )}
                       <div className="mt-3 flex justify-end">
@@ -580,8 +654,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             )}
           </SettingsAccordion>
+          )}
 
           {/* Режим печати ЭПЛ */}
+          {access.takskom && (
           <SettingsAccordion title="Режим печати ЭПЛ" icon={FileText} iconBg="bg-teal-100 text-teal-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-3">
               Какой PDF получает водитель при создании путевого листа. На каждый парк настраивается отдельно.
@@ -609,7 +685,39 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               ))}
             </div>
           </SettingsAccordion>
+          )}
 
+          {access.takskom && (
+          <SettingsAccordion title="Кто может создавать ЭПЛ" icon={Users} iconBg="bg-indigo-100 text-indigo-600">
+            <p className="text-xs sm:text-sm text-slate-600 mb-3">
+              Базовый режим на весь парк. Точечно по водителям можно переопределить в карточке водителя.
+            </p>
+            <div className="space-y-2 sm:space-y-3">
+              {[
+                { value: 'all', label: 'Водитель + менеджер/директор', desc: 'Обычный режим: водитель может создавать ЭПЛ в приложении.' },
+                { value: 'driver_only', label: 'Только водитель', desc: 'Создание ЭПЛ разрешено только водителям в приложении.' },
+                { value: 'manager_director_only', label: 'Только менеджер/директор', desc: 'Создание ЭПЛ в приложении водителя блокируется.' },
+              ].map((opt) => (
+                <label key={opt.value} className="flex items-start gap-2 sm:gap-3 p-3 sm:p-4 border-2 rounded-lg sm:rounded-xl cursor-pointer transition-all hover:bg-indigo-50 hover:border-indigo-300">
+                  <input
+                    type="radio"
+                    name="eplAccessMode"
+                    value={opt.value}
+                    checked={eplAccessMode === opt.value}
+                    onChange={() => setEplAccessMode(opt.value)}
+                    className="mt-0.5 sm:mt-1 w-4 h-4 text-indigo-600 focus:ring-2 focus:ring-indigo-500 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm sm:text-base text-slate-800">{opt.label}</div>
+                    <div className="text-xs sm:text-sm text-slate-500 mt-0.5">{opt.desc}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </SettingsAccordion>
+          )}
+
+          {access.freight && (
           <SettingsAccordion title="Грузовой рейс: адреса" icon={Truck} iconBg="bg-slate-100 text-slate-700">
             <p className="text-xs sm:text-sm text-slate-600 mb-3">
               Место отправления, погрузка и точки выгрузки в путевом (Такском). Если выбрано «водитель» — при создании ЭПЛ он обязан передать адреса в теле запроса (несколько выгрузок — массив строк).
@@ -662,12 +770,16 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </label>
             </div>
           </SettingsAccordion>
+          )}
 
+          {access.freight && (
           <SettingsAccordion title="Точки выгрузки (магазины)" icon={Store} iconBg="bg-amber-100 text-amber-800">
-            <FreightStoresTab parkId={park?.id} sceneNight={false} useAdminApi />
+            <FreightStoresTab parkId={park?.id} sceneNight={false} useAdminApi={isAdminApi} />
           </SettingsAccordion>
+          )}
 
           {/* Рассылки */}
+          {access.broadcasts && (
           <SettingsAccordion title="Рассылки" icon={Send} iconBg="bg-teal-100 text-teal-700">
             <div className="space-y-3">
               <p className="text-xs text-slate-500">
@@ -700,8 +812,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </p>
             </div>
           </SettingsAccordion>
+          )}
 
           {/* Организации (владельцы ТС) - гармошка */}
+          {access.owners && (
           <SettingsAccordion title="Организации (владельцы ТС)" icon={Users} iconBg="bg-amber-100 text-amber-600">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
               <p className="text-xs sm:text-sm text-slate-600 flex-1">
@@ -754,8 +868,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             )}
           </SettingsAccordion>
+          )}
 
           {/* Порядок списания баланса - гармошка */}
+          {access.balance && (
           <SettingsAccordion title="Порядок списания баланса" icon={Wallet} iconBg="bg-purple-100 text-purple-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-3 sm:mb-4">
               Выберите порядок списания средств при покупке ЭПЛ и других операциях
@@ -795,8 +911,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </label>
             </div>
           </SettingsAccordion>
+          )}
 
           {/* Цены для автопарка - гармошка */}
+          {access.pricing && (
           <SettingsAccordion title="Цены для автопарка" icon={Banknote} iconBg="bg-emerald-100 text-emerald-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-4">
               Установите цены на услуги для водителей этого парка. Водители разных парков могут платить разные суммы.
@@ -828,8 +946,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             </div>
           </SettingsAccordion>
+          )}
 
           {/* Настройки игры */}
+          {access.game && (
           <SettingsAccordion title="Настройки игры" icon={Gamepad2} iconBg="bg-amber-100 text-amber-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-4">
               Мини-игра для водителей: лидерборд по очкам и награды за места в ТОПе (бесплатные ЭПЛ или скидка).
@@ -968,8 +1088,10 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             </div>
           </SettingsAccordion>
+          )}
 
           {/* Фотоконтроль — гармошка */}
+          {access.photoControl && (
           <SettingsAccordion title="Фотоконтроль" icon={Camera} iconBg="bg-sky-100 text-sky-600">
             <p className="text-xs sm:text-sm text-slate-600 mb-4">
               Водители могут подавать заявки на фотоконтроль: загружают фото/видео авто по шагам, механик подтверждает дистанционно. По умолчанию для парка выключено.
@@ -1031,8 +1153,9 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </div>
             </div>
           </SettingsAccordion>
+          )}
 
-          {FEATURE_EVACUATOR_AND_COMMISSIONER && (
+          {FEATURE_EVACUATOR_AND_COMMISSIONER && access.services && (
             <>
               {/* Эвакуатор */}
               <SettingsAccordion title="Эвакуатор" icon={Truck} iconBg="bg-orange-100 text-orange-600">
@@ -1097,6 +1220,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
           )}
 
           {/* Удалить парк */}
+          {canDeletePark && (
           <div className="border-t border-slate-200 pt-4 mt-4">
             <div className="bg-red-50 border border-red-200 rounded-lg sm:rounded-xl p-4">
               <h3 className="text-sm font-bold text-red-800 mb-2">Опасная зона</h3>
@@ -1116,7 +1240,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
                   if (!ok) return;
                   setDeleting(true);
                   try {
-                    await api.delete(`/admin/parks/${park.id}`);
+                    await api.delete(`${apiRoot}/parks/${park.id}`);
                     if (onSave) onSave();
                     onClose();
                   } catch (e) {
@@ -1133,6 +1257,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               </motion.button>
             </div>
           </div>
+          )}
 
           {/* Кнопки */}
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 pt-3 sm:pt-4 border-t border-slate-200">
@@ -1149,7 +1274,7 @@ export default function ParkSettingsModal({ park, isOpen, onClose, onSave }) {
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleSaveSettings}
-              disabled={saving || deleting}
+              disabled={saving || deleting || !canEditAnything}
               className="w-full sm:flex-1 px-4 py-2.5 sm:py-3 bg-gradient-to-r from-teal-600 to-teal-700 text-white rounded-lg sm:rounded-xl hover:from-teal-700 hover:to-teal-800 font-semibold text-sm sm:text-base transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               <Save className="w-4 h-4" />

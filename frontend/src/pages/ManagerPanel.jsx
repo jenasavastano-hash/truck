@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Car, Users, Activity, User, ChevronDown, Camera, Link2, ChevronRight, Building2, CheckCircle2, BarChart2, Send, Wallet, Sun, Moon, Store } from 'lucide-react';
+import { Car, Users, Activity, User, ChevronDown, Camera, Link2, ChevronRight, Building2, CheckCircle2, BarChart2, Send, Wallet, Sun, Moon, Store, Clock3 } from 'lucide-react';
 import { getBroadcastThreads, getDashboard, getManagerParks, getDrivers, impersonateDriver } from '../api/managerApi';
 import { useAuth } from '../AuthContext';
 import FleetTab from '../components/manager/FleetTab';
@@ -11,10 +11,12 @@ import StatsTab from '../components/manager/StatsTab';
 import BroadcastsTab from '../components/manager/BroadcastsTab';
 import BroadcastInboxTab from '../components/manager/BroadcastInboxTab';
 import AdminFinance from '../components/admin/AdminFinance';
+import ParkSettingsModal from '../components/admin/ParkSettingsModal';
 import UserProfileMenu from '../components/shared/UserProfileMenu';
 import UserProfileModal from '../components/shared/UserProfileModal';
 import FreightOperationsBackdrop from '../components/freight/FreightOperationsBackdrop';
 import FreightStoresTab from '../components/manager/FreightStoresTab';
+import ShiftsCenter from '../components/shifts/ShiftsCenter';
 import {
   readOperationsSceneNight,
   operationsShell,
@@ -79,6 +81,85 @@ function AdminImpersonationBannerStrip() {
 
 function getParkKey(panelRole) {
   return panelRole === 'director' ? 'director_selected_park_id' : 'manager_selected_park_id';
+}
+
+function DirectorQuickDashboard({
+  night,
+  data,
+  onOpenTab,
+  canManageParkSettings,
+  canAccessStats,
+  canAccessBroadcasts,
+  canAccessFC,
+  canAccessShifts,
+}) {
+  const cards = [
+    { id: 'cars', label: 'Авто', value: data?.carsCount || 0, icon: Car },
+    { id: 'drivers', label: 'Водители', value: data?.driversCount || 0, icon: Users },
+    { id: 'assigned', label: 'На линии', value: data?.assignedDrivers || 0, icon: Link2 },
+  ];
+
+  const actions = [
+    { id: 'fleet', label: 'Автопарк', enabled: true },
+    { id: 'drivers', label: 'Водители', enabled: true },
+    { id: 'freight-stores', label: 'Точки выгрузки', enabled: true },
+    { id: 'shifts', label: 'Смены', enabled: canAccessShifts },
+    { id: 'broadcasts', label: 'Рассылки', enabled: canAccessBroadcasts },
+    { id: 'fc', label: 'Фотоконтроль', enabled: canAccessFC },
+    { id: 'stats', label: 'Статистика', enabled: canAccessStats },
+    { id: 'park-settings', label: 'Настройки парка', enabled: canManageParkSettings },
+  ].filter((x) => x.enabled);
+
+  return (
+    <div className={`rounded-2xl p-4 sm:p-5 ${operationsShell(night)}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className={`text-xs uppercase tracking-wide ${night ? 'text-slate-400' : 'text-slate-500'}`}>Кабинет директора</p>
+          <h2 className={`text-lg font-bold ${night ? 'text-slate-100' : 'text-slate-900'}`}>{data?.name || 'Парк'}</h2>
+        </div>
+        <button
+          type="button"
+          onClick={() => onOpenTab('park-settings')}
+          className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold ${
+            night
+              ? 'border border-white/20 bg-white/[0.08] text-slate-100 hover:bg-white/[0.15]'
+              : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          <Activity className="h-4 w-4" />
+          Настроить
+        </button>
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
+        {cards.map(({ id, label, value, icon: Icon }) => (
+          <div key={id} className={`rounded-xl px-3 py-3 ${operationsInset(night)}`}>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className={`text-[11px] ${night ? 'text-slate-400' : 'text-slate-500'}`}>{label}</span>
+              <Icon className={`h-4 w-4 ${night ? 'text-slate-300' : 'text-slate-500'}`} />
+            </div>
+            <div className={`text-xl font-bold leading-none ${night ? 'text-slate-100' : 'text-slate-900'}`}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        {actions.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => onOpenTab(a.id)}
+            className={`inline-flex items-center justify-between rounded-xl px-3 py-2 text-xs font-semibold ${
+              night
+                ? 'border border-white/15 bg-white/[0.06] text-slate-100 hover:bg-white/[0.12]'
+                : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <span>{a.label}</span>
+            <ChevronRight className="h-3.5 w-3.5 opacity-70" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function ManagerPanel({ panelRole = 'manager' }) {
@@ -222,7 +303,26 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
   const canAccessFC = dashboardData?.canAccessPhotoControl;
   const canAccessStats = dashboardData?.canAccessStatistics;
   const canAccessBroadcasts = !!dashboardData?.canAccessBroadcasts;
+  const canAccessShifts = canAccessBroadcasts;
   const canAccessFinance = !!dashboardData?.canAccessFinance;
+  const parkSettingsPermissions = {
+    canParkSettingsStatusName: !!dashboardData?.canParkSettingsStatusName,
+    canParkSettingsTakskom: !!dashboardData?.canParkSettingsTakskom,
+    canParkSettingsStaff: !!dashboardData?.canParkSettingsStaff,
+    canParkSettingsFreight: !!dashboardData?.canParkSettingsFreight,
+    canParkSettingsBroadcasts: !!dashboardData?.canParkSettingsBroadcasts,
+    canParkSettingsOwners: !!dashboardData?.canParkSettingsOwners,
+    canParkSettingsBalance: !!dashboardData?.canParkSettingsBalance,
+    canParkSettingsPricing: !!dashboardData?.canParkSettingsPricing,
+    canParkSettingsGame: !!dashboardData?.canParkSettingsGame,
+    canParkSettingsPhotoControl: !!dashboardData?.canParkSettingsPhotoControl,
+    canParkSettingsServices: !!dashboardData?.canParkSettingsServices,
+  };
+  const canManageParkSettings = !!(
+    isDirectorPanel ||
+    dashboardData?.canManageParkSettings ||
+    Object.values(parkSettingsPermissions).some(Boolean)
+  );
   const eplPermissions = {
     canViewEplLogs: !!dashboardData?.canViewEplLogs,
     canControlEplQueue: !!dashboardData?.canControlEplQueue,
@@ -241,10 +341,12 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
         { id: 'fleet', label: 'Автопарк', icon: Car, color: 'emerald' },
         { id: 'drivers', label: 'Водители', icon: Users, color: 'purple' },
         { id: 'freight-stores', label: 'Точки выгрузки', icon: Store, color: 'emerald' },
+        ...(canAccessShifts ? [{ id: 'shifts', label: 'Смены', icon: Clock3, color: 'emerald' }] : []),
         ...(canAccessBroadcasts ? [{ id: 'broadcasts', label: 'Рассылки', icon: Send, color: 'indigo' }] : []),
         ...(canAccessBroadcasts ? [{ id: 'broadcast-inbox', label: 'Ответы', icon: Send, color: 'indigo', badge: broadcastUnreadCount }] : []),
         ...(canAccessFC ? [{ id: 'fc', label: 'Фотоконтроль', icon: Camera, color: 'sky' }] : []),
         ...(canAccessStats ? [{ id: 'stats', label: 'Статистика', icon: BarChart2, color: 'violet' }] : []),
+        ...(isDirectorPanel && canManageParkSettings ? [{ id: 'park-settings', label: 'Настройки', icon: Activity, color: 'emerald' }] : []),
         ...(canAccessFinance ? [{ id: 'finance', label: 'Касса', icon: Wallet, color: 'blue' }] : []),
       ];
 
@@ -546,10 +648,16 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                             onClick={() => setParkDropdownOpen(false)}
                           />
                           <div
-                            className="absolute left-0 top-full mt-2 py-1 bg-white rounded-xl shadow-2xl border border-slate-200 min-w-[220px]"
+                            className={`absolute left-0 top-full mt-2 py-1 rounded-xl shadow-2xl min-w-[220px] ${
+                              operationsNight
+                                ? 'bg-slate-900/95 border border-white/15 backdrop-blur-xl'
+                                : 'bg-white border border-slate-200'
+                            }`}
                             style={{ zIndex: 50 }}
                           >
-                            <div className="px-3 py-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wide border-b border-slate-100 mb-1">
+                            <div className={`px-3 py-1.5 text-xs font-semibold uppercase tracking-wide mb-1 ${
+                              operationsNight ? 'text-slate-400 border-b border-white/10' : 'text-slate-400 border-b border-slate-100'
+                            }`}>
                               Ваши парки
                             </div>
                             {parks.map((p) => (
@@ -558,19 +666,21 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                                 onClick={() => handleSelectPark(p.id)}
                                 className={`w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors ${
                                   p.id === selectedParkId
-                                    ? 'bg-teal-50 text-teal-800 font-bold'
-                                    : 'text-slate-700 hover:bg-slate-50'
+                                    ? (operationsNight ? 'bg-teal-500/20 text-teal-100 font-bold' : 'bg-teal-50 text-teal-800 font-bold')
+                                    : (operationsNight ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-50')
                                 }`}
                               >
-                                <Building2 className="w-4 h-4 shrink-0 text-slate-400" />
+                                <Building2 className={`w-4 h-4 shrink-0 ${operationsNight ? 'text-slate-500' : 'text-slate-400'}`} />
                                 <span className="flex-1 truncate">{p.name}</span>
                                 {p.id === selectedParkId && <CheckCircle2 className="w-3.5 h-3.5 text-teal-600 shrink-0" />}
                               </button>
                             ))}
-                            <div className="border-t border-slate-100 mt-1 pt-1">
+                            <div className={`mt-1 pt-1 ${operationsNight ? 'border-t border-white/10' : 'border-t border-slate-100'}`}>
                               <button
                                 onClick={() => { setSelectedParkId(null); localStorage.removeItem(getParkKey(panelRole)); setParkDropdownOpen(false); }}
-                                className="w-full flex items-center gap-2 px-4 py-2 text-left text-xs text-slate-400 hover:bg-slate-50 transition-colors"
+                                className={`w-full flex items-center gap-2 px-4 py-2 text-left text-xs transition-colors ${
+                                  operationsNight ? 'text-slate-400 hover:bg-white/10' : 'text-slate-400 hover:bg-slate-50'
+                                }`}
                               >
                                 ← Список всех парков
                               </button>
@@ -639,21 +749,31 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                         aria-hidden
                       />
                       <div
-                        className="fixed z-[210] py-1 bg-white rounded-xl shadow-lg border border-slate-200 min-w-[160px] max-w-[min(16rem,calc(100vw-1rem))] whitespace-nowrap"
+                        className={`fixed z-[210] py-1 rounded-xl shadow-lg min-w-[160px] max-w-[min(16rem,calc(100vw-1rem))] whitespace-nowrap ${
+                          operationsNight ? 'bg-slate-900/95 border border-white/15 backdrop-blur-xl' : 'bg-white border border-slate-200'
+                        }`}
                         style={{ top: roleMenuPos.top, right: roleMenuPos.right }}
                         role="menu"
                       >
                         <button
                           type="button"
                           onClick={() => { setRoleDropdownOpen(false); setViewAs('manager'); }}
-                          className={`w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm ${viewAs === 'manager' ? 'bg-teal-50 text-teal-800 font-semibold' : 'text-slate-700 hover:bg-slate-50'}`}
+                          className={`w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm ${
+                            viewAs === 'manager'
+                              ? (operationsNight ? 'bg-teal-500/20 text-teal-100 font-semibold' : 'bg-teal-50 text-teal-800 font-semibold')
+                              : (operationsNight ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-50')
+                          }`}
                         >
                           <Users className="w-4 h-4 shrink-0" /> Менеджер
                         </button>
                         <button
                           type="button"
                           onClick={() => { setRoleDropdownOpen(false); setViewAs('driver'); }}
-                          className={`w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm ${viewAs === 'driver' ? 'bg-teal-50 text-teal-800 font-semibold' : 'text-slate-700 hover:bg-slate-50'}`}
+                          className={`w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm ${
+                            viewAs === 'driver'
+                              ? (operationsNight ? 'bg-teal-500/20 text-teal-100 font-semibold' : 'bg-teal-50 text-teal-800 font-semibold')
+                              : (operationsNight ? 'text-slate-200 hover:bg-white/10' : 'text-slate-700 hover:bg-slate-50')
+                          }`}
                         >
                           <User className="w-4 h-4 shrink-0" /> Водитель
                         </button>
@@ -759,11 +879,26 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
         </div>
       )}
 
+      {viewAs === 'manager' && isDirectorPanel && (
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-5">
+          <DirectorQuickDashboard
+            night={operationsNight}
+            data={dashboardData}
+            onOpenTab={setActiveTab}
+            canManageParkSettings={canManageParkSettings}
+            canAccessStats={canAccessStats}
+            canAccessBroadcasts={canAccessBroadcasts}
+            canAccessFC={canAccessFC}
+            canAccessShifts={canAccessShifts}
+          />
+        </div>
+      )}
+
       {/* Табы */}
       {viewAs === 'manager' && (
         <div className={`sticky top-0 z-20 ${operationsStickyTabsRow(operationsNight)}`}>
           <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8">
-            <div className="flex gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-9 gap-2 py-2">
               {tabs.map((tab, index) => {
                 const Icon = tab.icon;
                 const isActive = activeTab === tab.id;
@@ -773,19 +908,19 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                     ? 'bg-gradient-to-r from-teal-600 to-teal-700 text-white shadow-md'
                     : inactive,
                   purple: isActive
-                    ? 'bg-gradient-to-r from-slate-600 to-slate-700 text-white shadow-md'
+                    ? 'bg-gradient-to-r from-violet-600 to-violet-700 text-white shadow-md'
                     : inactive,
                   sky: isActive
                     ? 'bg-gradient-to-r from-sky-500 to-sky-600 text-white shadow-md'
                     : inactive,
                   violet: isActive
-                    ? 'bg-gradient-to-r from-violet-500 to-violet-600 text-white shadow-md'
+                    ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white shadow-md'
                     : inactive,
                   blue: isActive
-                    ? 'bg-gradient-to-r from-teal-600 to-teal-700 text-white shadow-md'
+                    ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-md'
                     : inactive,
                   indigo: isActive
-                    ? 'bg-gradient-to-r from-sky-500 to-sky-600 text-white shadow-md'
+                    ? 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white shadow-md'
                     : inactive,
                 };
                 return (
@@ -797,23 +932,16 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => setActiveTab(tab.id)}
-                    className={`relative flex items-center gap-2 px-5 py-2.5 font-semibold transition-all rounded-lg whitespace-nowrap ${colorClasses[tab.color]}`}
+                    className={`relative flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2.5 font-semibold text-xs sm:text-sm transition-all rounded-xl border ${colorClasses[tab.color]}`}
                   >
-                    <Icon className="w-4 h-4 sm:w-5 sm:h-5" />
-                    <span className="text-sm sm:text-base">{tab.label}</span>
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{tab.label}</span>
                     {tab.badge > 0 && (
                       <span className={`ml-1 inline-flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold ${
                         isActive ? 'bg-white text-slate-900' : 'bg-teal-600 text-white'
                       }`}>
                         {tab.badge > 99 ? '99+' : tab.badge}
                       </span>
-                    )}
-                    {isActive && (
-                      <motion.div
-                        layoutId="activeTabIndicator"
-                        className="absolute -bottom-1 left-0 right-0 h-0.5 bg-white rounded-full"
-                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
-                      />
                     )}
                   </motion.button>
                 );
@@ -856,6 +984,15 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                   onUnreadCountChange={(n) => setBroadcastUnreadCount(n)}
                 />
               )}
+              {activeTab === 'shifts' && (
+                <ShiftsCenter
+                  role={isDirectorPanel ? 'director' : 'manager'}
+                  parkId={selectedParkId}
+                  parkMeta={selectedPark || null}
+                  sceneNight={operationsNight}
+                  canManage={canAccessShifts}
+                />
+              )}
               {activeTab === 'fc' && <FCTab parkId={selectedParkId} sceneNight={operationsNight} />}
               {activeTab === 'stats' && (
                 <StatsTab
@@ -863,6 +1000,23 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
                   sceneNight={operationsNight}
                   permissions={statsPermissions}
                   eplPermissions={eplPermissions}
+                />
+              )}
+              {activeTab === 'park-settings' && isDirectorPanel && canManageParkSettings && (
+                <ParkSettingsModal
+                  park={selectedPark || { id: selectedParkId, name: dashboardData?.parkName || `Парк #${selectedParkId}` }}
+                  isOpen
+                  onClose={() => setActiveTab('fleet')}
+                  onSave={async () => {
+                    try {
+                      if (!selectedParkId) return;
+                      const data = await getDashboard(selectedParkId);
+                      setDashboardData(data);
+                    } catch (_) {}
+                  }}
+                  apiPrefix="director"
+                  canDeletePark={false}
+                  settingsPermissions={parkSettingsPermissions}
                 />
               )}
               {activeTab === 'finance' && <AdminFinance sceneNight={operationsNight} />}

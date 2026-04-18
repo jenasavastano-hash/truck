@@ -48,7 +48,17 @@
 
 **Профиль и прочее:** `GET /profile`, `GET /home-stats`, `GET /balance`, уведомления, треды рассылок, `POST /balance/topup`, `GET /payment/:paymentId/status`.
 
+- `GET /driver/profile` теперь возвращает:
+  - `eplAccessMode`: `all | driver_only | manager_director_only` (уровень парка),
+  - `eplAccessOverride`: `default | force_allow | force_deny` (персонально по водителю),
+  - `canCreateEpl`: итоговый флаг доступа на создание ЭПЛ в кабинете водителя.
+
 **ЭПЛ и смена:** `GET /epl/list`, `GET /commercial-shipping-types` (коды вида коммерческой перевозки для формы), `POST /epl/create` (тело: `startOdometer?`, `commercialShippingType?` — код `ПГ|РП|ЗП|ТЛ|ОД`, по умолчанию **ПГ**), `GET /epl/:id`, `POST /epl/:id/complete`, `POST /epl/:id/close-shift`, `GET /epl/:id/document`, титулы и подпись: `GET /epl/:eplId/titles`, `POST /epl/:titleId/sign`, `POST /epl/:eplId/submit` (в файле есть перекрывающиеся маршруты `GET /epl/:eplId` — порядок объявления важен).
+
+- `POST /driver/epl/create` блокируется (403), если эффективный доступ `canCreateEpl = false`.
+- `POST /driver/shift-open-request` — водитель отправляет заявку менеджеру/директору на открытие смены (создаёт запись в `shift_open_requests`, создаёт/обновляет тред и отправляет нотификации в парк). Требует `startOdometer`, антиспам: только 1 активная заявка `pending` на водителя.
+  - если на текущую дату есть план смены в `shift_plans` (status=`planned`), то заявка не создаётся: система сразу создаёт `epl` со статусом `pending_clinic` и помечает план `consumed`.
+- `GET /driver/shift-open-request/status` — статус последней заявки водителя (`hasActiveRequest`, `request`) + наличие плана на сегодня (`hasPlannedShiftToday`, `plannedShift`).
 
 **Рейсы:** `POST /rides/start`, `POST /rides/:rideId/end`, `GET /rides`.
 
@@ -70,11 +80,28 @@
 
 Фотоконтроль: `photo-control/applications` и связанные `PATCH`.
 
+- `PUT /manager/drivers/:driverId` поддерживает `eplAccessOverride` (`default | force_allow | force_deny`).
+- `GET /manager/shift-open-requests` — список заявок на открытие смены (поиск/фильтр по статусу).
+- `POST /manager/shift-open-requests/:id/approve` — принять заявку и открыть смену (создать `epl` со статусом `pending_clinic`).
+- `POST /manager/shift-open-requests/:id/reject` — отклонить заявку (с причиной или без).
+- `GET /manager/shift-plans` — список планов смен на дату (`date`, `status`, `search`).
+- `POST /manager/shift-plans` — создать/обновить план смены для водителя (upsert по `parkId+shiftDate+driverUserId`).
+- `POST /manager/shift-plans/:id/cancel` — отменить запланированную смену.
+
 ---
 
 ## Director (`/api/director`)
 
 Широкий паритет с менеджером плюс управление парком/водителями/авто/EPL с точки зрения директора: см. grep в `director.js` (dashboard, epl, cars, drivers, statistics, photo-control, broadcast).
+
+- `GET/PUT /director/park/settings` поддерживает `eplAccessMode` (`all | driver_only | manager_director_only`).
+- `PUT /director/drivers/:driverId` поддерживает `eplAccessOverride` (`default | force_allow | force_deny`).
+- `GET /director/shift-open-requests` — список заявок на открытие смены (поиск/фильтр по статусу).
+- `POST /director/shift-open-requests/:id/approve` — принять заявку и открыть смену (создать `epl` со статусом `pending_clinic`).
+- `POST /director/shift-open-requests/:id/reject` — отклонить заявку (с причиной или без).
+- `GET /director/shift-plans` — список планов смен на дату (`date`, `status`, `search`).
+- `POST /director/shift-plans` — создать/обновить план смены для водителя (upsert по `parkId+shiftDate+driverUserId`).
+- `POST /director/shift-plans/:id/cancel` — отменить запланированную смену.
 
 ---
 
@@ -83,6 +110,26 @@
 Takskom: `/takskom/check`, `/takskom/carparks`, `/takskom/link-carpark`.
 
 Настройки: `epl-creation-mode`, парки, синхронизация, владельцы, taxcom-links, финансы парка.
+
+- `GET/PUT /admin/parks/:parkId/settings` поддерживает `eplAccessMode` (`all | driver_only | manager_director_only`).
+- `PUT /admin/drivers/:driverId/takskom` поддерживает `eplAccessOverride` (`default | force_allow | force_deny`).
+- `GET /admin/shift-open-requests` — список заявок на открытие смены по всем паркам (или `?parkId=`).
+- `POST /admin/shift-open-requests/:id/approve` — принять заявку и открыть смену (создать `epl` со статусом `pending_clinic`).
+- `POST /admin/shift-open-requests/:id/reject` — отклонить заявку (с причиной или без).
+- `GET /admin/shift-plans` — список планов смен по паркам (`parkId`, `date`, `status`, `search`).
+- `POST /admin/shift-plans` — создать/обновить план смены (обязательно `parkId`).
+- `POST /admin/shift-plans/:id/cancel` — отменить запланированную смену.
+- `POST /admin/parks/:parkId/staff` и `POST /director/parks/:parkId/staff` теперь поддерживают несколько сотрудников на роль:
+  - если передан `id` — обновление конкретного сотрудника;
+  - если `id` не передан — создание новой записи;
+  - новые поля персонала: `isActive`, `priority`.
+
+## Валидации активации парка
+
+- При включении парка (`isActive=1`) в настройках:
+  - должен быть активный `dispatcher`, `medic`, `technic`;
+  - у каждой роли должны быть заполнены `fullName` и `position`;
+  - у медика дополнительно обязательны лицензия и даты (`licenseSerial`, `licenseNumber`, `licenseDateStart`, `licenseDateEnd`).
 
 ЭПЛ: списки, детали, логи, закрытие смены, requeue, mutate-inn, документы/QR.
 

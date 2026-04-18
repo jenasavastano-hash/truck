@@ -254,6 +254,32 @@ async function postEplCreated(payload) {
   }
 }
 
+async function reportCreateAttemptFailed(item, failureCode, errorMessage) {
+  try {
+    const res = await fetch(`${API_URL}/api/worker/epl/${item.eplId}/create-attempt-failed`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        failureCode: failureCode || 'taxcom_create_failed',
+        errorMessage: String(errorMessage || 'Создание ЭПЛ не завершено воркером').slice(0, 900),
+        maxAttempts: parseInt(process.env.WORKER_MAX_CREATE_ATTEMPTS || '3', 10) || 3,
+        minIntervalSec: parseInt(process.env.WORKER_MIN_FAIL_REPORT_INTERVAL_SEC || '20', 10) || 20
+      }),
+      signal: AbortSignal.timeout(API_POST_TIMEOUT_MS)
+    });
+    if (!res.ok) {
+      stats.apiErrors++;
+      log(`create-attempt-failed: ${res.status}`, 'WARN', { role: 'API', eplId: item.eplId, waybill: item.waybillNumber });
+      return false;
+    }
+    return true;
+  } catch (e) {
+    stats.apiErrors++;
+    log(`create-attempt-failed: ${e.message}`, 'WARN', { role: 'API', eplId: item.eplId, waybill: item.waybillNumber });
+    return false;
+  }
+}
+
 async function runWithRetry(role, item, taskFn, usePage) {
   const wb = item.waybillNumber || item.eplId;
   const s = roleState[role];
@@ -384,10 +410,28 @@ async function runDispatcherBatch(items) {
   );
   const results = await Promise.allSettled(tasks);
   results.forEach((r, i) => {
+    const item = items[i];
     if (r.status === 'rejected') {
       stats.dispatcher.fail++;
       stats.dispatcher.lastError = r.reason?.message;
-      log(`${r.reason?.message}`, 'ERROR', { role, waybill: items[i]?.waybillNumber });
+      log(`${r.reason?.message}`, 'ERROR', { role, waybill: item?.waybillNumber });
+      if (item?.eplId) {
+        reportCreateAttemptFailed(item, 'dispatcher_exception', r.reason?.message || 'Dispatcher task rejected');
+      }
+      return;
+    }
+    const mintransId = r.value?.mintransId ? String(r.value.mintransId) : '';
+    const isFake = mintransId.startsWith('stub-') || mintransId.startsWith('taxcom-');
+    if (!mintransId || isFake) {
+      stats.dispatcher.fail++;
+      const msg = !mintransId
+        ? 'Dispatcher did not return mintransId'
+        : `Dispatcher returned placeholder mintransId (${mintransId})`;
+      stats.dispatcher.lastError = msg;
+      log(msg, 'WARN', { role, eplId: item?.eplId, waybill: item?.waybillNumber });
+      if (item?.eplId) {
+        reportCreateAttemptFailed(item, 'dispatcher_no_mintrans', msg);
+      }
     }
   });
   for (const p of toClose) {
@@ -536,9 +580,14 @@ async function main() {
   );
   log(`Логи: ${logFile}`, 'INFO', {});
 
+  const warmupAllRoles = /^(1|true|yes)$/i.test(String(process.env.WARMUP_ALL_ROLES || '0').trim());
   await ensureBrowser('dispatcher');
-  await ensureBrowser('medic');
-  await ensureBrowser('mechanic');
+  if (warmupAllRoles) {
+    await ensureBrowser('medic');
+    await ensureBrowser('mechanic');
+  } else {
+    log('Lazy browser mode: медик/механик открываются только когда для них есть задачи', 'INFO', {});
+  }
 
   async function sendHeartbeat() {
     if (shuttingDown) return;
@@ -570,10 +619,16 @@ async function main() {
     log(`Heartbeat: uptime ${uptimeMin} мин, тиков ${stats.ticks}`, 'INFO', {});
   }
 
-  setInterval(() => { sendHeartbeat(); }, HEARTBEAT_INTERVAL_MS);
+  let heartbeatTimer = null;
+  let inactivityTimer = null;
+  let statsTimer = null;
+
+  if (!ONCE) {
+    heartbeatTimer = setInterval(() => { sendHeartbeat(); }, HEARTBEAT_INTERVAL_MS);
+  }
   sendHeartbeat();
 
-  setInterval(() => {
+  inactivityTimer = setInterval(() => {
     if (shuttingDown) return;
     const now = Date.now();
     for (const role of ['dispatcher', 'medic', 'mechanic']) {
@@ -588,7 +643,7 @@ async function main() {
     }
   }, INACTIVITY_CHECK_INTERVAL_MS);
 
-  setInterval(() => {
+  statsTimer = setInterval(() => {
     if (shuttingDown) return;
     logStats();
   }, STATS_INTERVAL_MIN * 60 * 1000);
@@ -601,8 +656,11 @@ async function main() {
     items = await fetchPending();
     if (items?.length) await runMechanicBatch(items.filter(suitableForMechanic).slice(0, MAX_PARALLEL));
     await Promise.all(['dispatcher', 'medic', 'mechanic'].map((r) => closeBrowser(r)));
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    if (inactivityTimer) clearInterval(inactivityTimer);
+    if (statsTimer) clearInterval(statsTimer);
     logStats();
-    process.exit(0);
+    log('ONCE-режим завершён', 'INFO', {});
     return;
   }
 

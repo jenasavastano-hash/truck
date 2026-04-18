@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
-import { ArrowLeft, Building2, ChevronDown, User, Users, Shield, FileText, Truck, Send, ShieldAlert, Wallet, Landmark, Sun, Moon } from 'lucide-react';
+import { ArrowLeft, Building2, ChevronDown, User, Users, Shield, FileText, Truck, Send, ShieldAlert, Wallet, Landmark, Sun, Moon, Clock3 } from 'lucide-react';
 import { useAuth } from '../AuthContext';
 import api from '../api';
 import AdminParksList from '../components/AdminParksList';
@@ -16,6 +16,7 @@ import { FEATURE_EVACUATOR_AND_COMMISSIONER } from '../config/features';
 import UserProfileMenu from '../components/shared/UserProfileMenu';
 import UserProfileModal from '../components/shared/UserProfileModal';
 import FreightOperationsBackdrop from '../components/freight/FreightOperationsBackdrop';
+import ShiftsCenter from '../components/shifts/ShiftsCenter';
 
 function readAdminSceneNight() {
   try {
@@ -100,7 +101,7 @@ export default function AdminPanel() {
   }, [roleDropdownOpen]);
   const [driverSearch, setDriverSearch] = useState('');
   const [driverPage, setDriverPage] = useState(1);
-  const [adminSection, setAdminSection] = useState('parks'); // 'parks' | 'epl' | 'evacuators' | 'commissioners' | 'drivers' | 'finance'
+  const [adminSection, setAdminSection] = useState('parks'); // 'parks' | 'epl' | 'shifts' | 'evacuators' | 'commissioners' | 'drivers' | 'finance'
   const [directorList, setDirectorList] = useState([]);
   const [directorListLoading, setDirectorListLoading] = useState(false);
   const [directorSearch, setDirectorSearch] = useState('');
@@ -591,6 +592,18 @@ export default function AdminPanel() {
               <FileText className="w-4 h-4" />
               ЭПЛ
             </button>
+            <button
+              type="button"
+              onClick={() => { setAdminSection('shifts'); setView('parks'); }}
+              className={`inline-flex shrink-0 items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold border transition ${
+                adminSection === 'shifts'
+                  ? 'bg-emerald-600 text-white border-emerald-300 shadow-lg shadow-emerald-900/40'
+                  : adminTabInactiveClass(adminSceneNight)
+              }`}
+            >
+              <Clock3 className="w-4 h-4" />
+              Смены
+            </button>
             {FEATURE_EVACUATOR_AND_COMMISSIONER && (
               <>
                 <button
@@ -1046,6 +1059,8 @@ export default function AdminPanel() {
           <AdminParksList key={refreshKey} night={adminSceneNight} onSelectPark={handleSelectPark} />
         ) : viewRole === 'admin' && adminSection === 'finance' ? (
           <AdminFinance sceneNight={adminSceneNight} />
+        ) : viewRole === 'admin' && adminSection === 'shifts' ? (
+          <ShiftsCenter role="admin" sceneNight={adminSceneNight} canManage />
         ) : viewRole === 'admin' && FEATURE_EVACUATOR_AND_COMMISSIONER && adminSection === 'evacuators' ? (
           <AdminEvacuators />
         ) : viewRole === 'admin' && FEATURE_EVACUATOR_AND_COMMISSIONER && adminSection === 'commissioners' ? (

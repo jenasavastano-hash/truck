@@ -10,6 +10,8 @@ const TakskornAPI = require('../takskom-api');
 const { deductBalance, addBalance, getBalance } = require('../utils/balance');
 const { CANCELABLE_BEFORE_TAXCOM, CLOSE_SHIFT_FAIL_STATUSES, sqlQuoteList } = require('../utils/epl-status');
 const { parseDbUtc } = require('../utils/shifts');
+const { normalizeCommercialShippingType } = require('../utils/commercialShippingTypes');
+const { generateFastEplPdf } = require('../services/fast-epl-pdf');
 
 /** Пробег по умолчанию при завершении рейса без водителя (к начальному пробегу не добавляем, а задаём примерный). */
 const DEFAULT_KM_ADD_IF_NO_DRIVER = parseInt(process.env.EPL_COMPLETE_DEFAULT_KM, 10) || 50;
@@ -241,6 +243,7 @@ router.get('/drivers', authenticateToken, authorizeRole('manager'), (req, res) =
                   (COALESCE(u.balanceReal,0) + COALESCE(u.balanceUnreal,0)) as balance,
                   COALESCE(u.balanceReal,0) as balanceReal, COALESCE(u.balanceUnreal,0) as balanceUnreal,
                   d.license, u.licenseSerial, u.licenseNumber, u.licenseDate, d.carId, d.isVerified,
+                  COALESCE(d.eplAccessOverride, 'default') as eplAccessOverride,
                   c.regNumber, c.brand, c.model, u.personnelNumber,
                   u.inn, u.snils, d.syncedWithTakskom
            FROM drivers d
@@ -1214,6 +1217,7 @@ router.get('/drivers/:driverId', authenticateToken, authorizeRole('manager'), (r
         db.get(
           `SELECT d.id, u.id as userId, u.fullName, u.phone, u.email, u.personnelNumber,
                   d.license, u.licenseSerial, u.licenseNumber, u.licenseDate, d.carId, d.isVerified, d.syncedWithTakskom,
+                  COALESCE(d.eplAccessOverride, 'default') as eplAccessOverride,
                   c.id as carId, c.regNumber, c.brand, c.model, c.inventoryNumber
            FROM drivers d
            JOIN users u ON d.userId = u.id
@@ -1271,7 +1275,7 @@ router.get('/cars/:carId', authenticateToken, authorizeRole('manager'), (req, re
 router.put('/drivers/:driverId', authenticateToken, authorizeRole('manager'), (req, res) => {
   try {
     const { driverId } = req.params;
-    const { carId, isVerified, fullName, phone, license, licenseSerial, licenseNumber, licenseDate, inn, snils, personnelNumber } = req.body;
+    const { carId, isVerified, fullName, phone, license, licenseSerial, licenseNumber, licenseDate, inn, snils, personnelNumber, eplAccessOverride } = req.body;
     const done = () => res.json({ message: 'Driver updated successfully' });
 
     getManagerPark(req, (err, mgr) => {
@@ -1308,6 +1312,15 @@ router.put('/drivers/:driverId', authenticateToken, authorizeRole('manager'), (r
             if (license !== undefined) {
               driverUpdates.push('license = ?');
               driverValues.push(license);
+            }
+            if (eplAccessOverride !== undefined) {
+              const eplOverride = eplAccessOverride === 'force_allow'
+                ? 'force_allow'
+                : eplAccessOverride === 'force_deny'
+                  ? 'force_deny'
+                  : 'default';
+              driverUpdates.push('eplAccessOverride = ?');
+              driverValues.push(eplOverride);
             }
 
             const userUpdates = [];
@@ -1608,6 +1621,402 @@ function getManagerWithPermissions(userId, parkId, cb) {
   const params = parkId ? [userId, parkId] : [userId];
   db.get(sql, params, cb);
 }
+
+function buildWaybillNumber(parkId) {
+  const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+  return `WB-${parkId}-${date}-${Date.now().toString().slice(-4)}`;
+}
+
+function listShiftOpenRequestsForPark(parkId, query, cb) {
+  const search = String(query?.search || '').trim().toLowerCase();
+  const statusRaw = String(query?.status || 'pending').trim().toLowerCase();
+  const allowedStatuses = new Set(['pending', 'approved', 'rejected', 'all']);
+  const status = allowedStatuses.has(statusRaw) ? statusRaw : 'pending';
+  const limitRaw = parseInt(query?.limit, 10);
+  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, limitRaw)) : 50;
+
+  const where = ['r.parkId = ?'];
+  const params = [parkId];
+  if (status !== 'all') {
+    where.push('r.status = ?');
+    params.push(status);
+  }
+  if (search) {
+    where.push(`(
+      LOWER(COALESCE(u.fullName,'')) LIKE ?
+      OR LOWER(COALESCE(u.phone,'')) LIKE ?
+      OR LOWER(COALESCE(c.regNumber,'')) LIKE ?
+      OR LOWER(COALESCE(r.message,'')) LIKE ?
+    )`);
+    const q = `%${search}%`;
+    params.push(q, q, q, q);
+  }
+  params.push(limit);
+
+  db.all(
+    `SELECT r.id, r.parkId, r.driverUserId, r.driverId, r.carId, r.message, r.status,
+            r.startOdometer, r.startFuel, r.commercialShippingType,
+            r.freightOriginAddress, r.freightLoadAddress, r.freightUnloadAddresses,
+            r.rejectionReason, r.requestedByUserId, r.processedByUserId, r.processedByRole,
+            r.resultEplId, r.createdAt, r.updatedAt,
+            u.fullName as driverName, u.phone as driverPhone,
+            c.regNumber as carRegNumber,
+            e.waybillNumber as resultWaybillNumber, e.status as resultEplStatus
+     FROM shift_open_requests r
+     LEFT JOIN users u ON u.id = r.driverUserId
+     LEFT JOIN cars c ON c.id = r.carId
+     LEFT JOIN epl e ON e.id = r.resultEplId
+     WHERE ${where.join(' AND ')}
+     ORDER BY
+       CASE r.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
+       r.createdAt DESC, r.id DESC
+     LIMIT ?`,
+    params,
+    cb
+  );
+}
+
+router.get('/shift-open-requests', authenticateToken, authorizeRole('manager'), (req, res) => {
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+    listShiftOpenRequestsForPark(manager.parkId, req.query, (qErr, rows) => {
+      if (qErr) return res.status(500).json({ error: qErr.message });
+      res.json(rows || []);
+    });
+  });
+});
+
+router.post('/shift-open-requests/:id/approve', authenticateToken, authorizeRole('manager'), (req, res) => {
+  const requestId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(requestId) || requestId <= 0) {
+    return res.status(400).json({ error: 'Некорректный id заявки' });
+  }
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+
+    db.get(
+      `SELECT *
+       FROM shift_open_requests
+       WHERE id = ? AND parkId = ?`,
+      [requestId, manager.parkId],
+      (rErr, requestRow) => {
+        if (rErr) return res.status(500).json({ error: rErr.message });
+        if (!requestRow) return res.status(404).json({ error: 'Заявка не найдена' });
+        if (requestRow.status !== 'pending') return res.status(409).json({ error: 'Заявка уже обработана' });
+
+        db.get(
+          `SELECT d.id as driverId, d.userId as driverUserId, d.parkId, d.carId,
+                  p.eplPrintMode, p.name as parkName, p.inn as parkInn, p.kpp as parkKpp, p.ogrn as parkOgrn, p.city as parkCity,
+                  u.fullName, u.inn, u.licenseSerial, u.licenseNumber,
+                  c.regNumber, c.brand, c.model, c.vehicleType,
+                  po.name as ownerName, po.inn as ownerInn, po.kpp as ownerKpp, po.ogrn as ownerOgrn, po.ogrnip as ownerOgrnip
+           FROM drivers d
+           JOIN parks p ON p.id = d.parkId
+           LEFT JOIN users u ON u.id = d.userId
+           LEFT JOIN cars c ON c.id = d.carId
+           LEFT JOIN park_owners po ON po.id = c.ownerId AND po.parkId = d.parkId
+           WHERE d.userId = ? AND d.parkId = ?`,
+          [requestRow.driverUserId, manager.parkId],
+          (dErr, driverRow) => {
+            if (dErr) return res.status(500).json({ error: dErr.message });
+            if (!driverRow) return res.status(404).json({ error: 'Водитель не найден в парке' });
+            if (!driverRow.carId) return res.status(400).json({ error: 'У водителя не привязано авто' });
+
+            const fallbackStartOdometer = Number(requestRow.startOdometer);
+            const startOdometer = Number.isFinite(fallbackStartOdometer) ? fallbackStartOdometer : 0;
+            const waybillNumber = buildWaybillNumber(driverRow.parkId);
+            const freightOriginAddress = req.body?.freightOriginAddress != null
+              ? String(req.body.freightOriginAddress).trim() || null
+              : requestRow.freightOriginAddress || null;
+            const freightLoadAddress = req.body?.freightLoadAddress != null
+              ? String(req.body.freightLoadAddress).trim() || null
+              : requestRow.freightLoadAddress || null;
+            const freightUnloadAddresses = req.body?.freightUnloadAddresses != null
+              ? JSON.stringify(
+                  (Array.isArray(req.body.freightUnloadAddresses) ? req.body.freightUnloadAddresses : [])
+                    .map((x) => String(x).trim())
+                    .filter(Boolean)
+                ) || null
+              : requestRow.freightUnloadAddresses || null;
+            const commercialShippingType = req.body?.commercialShippingType != null
+              ? String(req.body.commercialShippingType).trim() || null
+              : requestRow.commercialShippingType || null;
+
+            db.run(
+              `INSERT INTO epl
+                 (parkId, driverId, carId, waybillNumber, status, startOdometer, errorMessage, commercialShippingType, freightOriginAddress, freightLoadAddress, freightUnloadAddresses)
+               VALUES (?, ?, ?, ?, 'pending_clinic', ?, NULL, ?, ?, ?, ?)`,
+              [
+                driverRow.parkId,
+                driverRow.driverId,
+                driverRow.carId,
+                waybillNumber,
+                startOdometer,
+                commercialShippingType,
+                freightOriginAddress,
+                freightLoadAddress,
+                freightUnloadAddresses,
+              ],
+              function (createErr) {
+                if (createErr) return res.status(500).json({ error: createErr.message });
+                const eplId = this.lastID;
+                const printMode = driverRow?.eplPrintMode || 'our_then_taxcom';
+                if (printMode !== 'taxcom_only') {
+                  generateFastEplPdf({
+                    eplId,
+                    driver: driverRow,
+                    startOdometer,
+                    createdAt: new Date(),
+                    commercialShippingType,
+                  });
+                }
+                db.run(
+                  `UPDATE shift_open_requests
+                   SET status = 'approved',
+                       processedByUserId = ?,
+                       processedByRole = 'manager',
+                       resultEplId = ?,
+                       updatedAt = CURRENT_TIMESTAMP
+                   WHERE id = ?`,
+                  [req.user.userId, eplId, requestId],
+                  (upReqErr) => {
+                    if (upReqErr) return res.status(500).json({ error: upReqErr.message });
+                    db.run(
+                      `INSERT INTO notifications (userId, type, title, body, eplId)
+                       VALUES (?, 'shift_opened', 'Смена открыта', ?, ?)`,
+                      [
+                        driverRow.driverUserId,
+                        `Менеджер открыл смену. Путевой лист #${waybillNumber} поставлен в очередь.`,
+                        eplId,
+                      ],
+                      () => {}
+                    );
+                    res.json({
+                      ok: true,
+                      requestId,
+                      eplId,
+                      waybillNumber,
+                      status: 'approved',
+                    });
+                  }
+                );
+              }
+            );
+          }
+        );
+      }
+    );
+  });
+});
+
+router.post('/shift-open-requests/:id/reject', authenticateToken, authorizeRole('manager'), (req, res) => {
+  const requestId = parseInt(req.params.id, 10);
+  if (!Number.isFinite(requestId) || requestId <= 0) {
+    return res.status(400).json({ error: 'Некорректный id заявки' });
+  }
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+
+    const reason = String(req.body?.reason || '').trim().slice(0, 500);
+    db.get(
+      `SELECT id, driverUserId, status
+       FROM shift_open_requests
+       WHERE id = ? AND parkId = ?`,
+      [requestId, manager.parkId],
+      (rErr, requestRow) => {
+        if (rErr) return res.status(500).json({ error: rErr.message });
+        if (!requestRow) return res.status(404).json({ error: 'Заявка не найдена' });
+        if (requestRow.status !== 'pending') return res.status(409).json({ error: 'Заявка уже обработана' });
+
+        db.run(
+          `UPDATE shift_open_requests
+           SET status = 'rejected',
+               rejectionReason = ?,
+               processedByUserId = ?,
+               processedByRole = 'manager',
+               updatedAt = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [reason || null, req.user.userId, requestId],
+          (uErr) => {
+            if (uErr) return res.status(500).json({ error: uErr.message });
+            db.run(
+              `INSERT INTO notifications (userId, type, title, body)
+               VALUES (?, 'shift_open_request_rejected', 'Заявка отклонена', ?)`,
+              [
+                requestRow.driverUserId,
+                reason
+                  ? `Менеджер отклонил заявку: ${reason}`
+                  : 'Менеджер отклонил заявку на открытие смены.',
+              ],
+              () => {}
+            );
+            res.json({ ok: true, requestId, status: 'rejected' });
+          }
+        );
+      }
+    );
+  });
+});
+
+function listShiftPlansForPark(parkId, query, cb) {
+  const date = String(query?.date || getMoscowDate()).trim();
+  const search = String(query?.search || '').trim().toLowerCase();
+  const statusRaw = String(query?.status || 'planned').trim().toLowerCase();
+  const allowedStatuses = new Set(['planned', 'consumed', 'cancelled', 'all']);
+  const status = allowedStatuses.has(statusRaw) ? statusRaw : 'planned';
+  const where = ['sp.parkId = ?', 'sp.shiftDate = ?'];
+  const params = [parkId, date];
+  if (status !== 'all') {
+    where.push('sp.status = ?');
+    params.push(status);
+  }
+  if (search) {
+    where.push(`(
+      LOWER(COALESCE(u.fullName,'')) LIKE ?
+      OR LOWER(COALESCE(u.phone,'')) LIKE ?
+      OR LOWER(COALESCE(c.regNumber,'')) LIKE ?
+      OR LOWER(COALESCE(sp.note,'')) LIKE ?
+    )`);
+    const q = `%${search}%`;
+    params.push(q, q, q, q);
+  }
+  db.all(
+    `SELECT sp.*,
+            u.fullName as driverName, u.phone as driverPhone,
+            c.regNumber as carRegNumber,
+            e.waybillNumber as consumedWaybillNumber
+     FROM shift_plans sp
+     LEFT JOIN users u ON u.id = sp.driverUserId
+     LEFT JOIN cars c ON c.id = sp.carId
+     LEFT JOIN epl e ON e.id = sp.consumedByEplId
+     WHERE ${where.join(' AND ')}
+     ORDER BY
+       CASE sp.status WHEN 'planned' THEN 0 WHEN 'consumed' THEN 1 WHEN 'cancelled' THEN 2 ELSE 3 END,
+       COALESCE(u.fullName, u.phone, '') ASC,
+       sp.createdAt DESC`,
+    params,
+    cb
+  );
+}
+
+router.get('/shift-plans', authenticateToken, authorizeRole('manager'), (req, res) => {
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+    listShiftPlansForPark(manager.parkId, req.query, (qErr, rows) => {
+      if (qErr) return res.status(500).json({ error: qErr.message });
+      res.json(rows || []);
+    });
+  });
+});
+
+router.post('/shift-plans', authenticateToken, authorizeRole('manager'), (req, res) => {
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+    const driverUserId = parseInt(req.body?.driverUserId, 10);
+    const shiftDate = String(req.body?.shiftDate || getMoscowDate()).trim();
+    const startOdometerRaw = Number(req.body?.startOdometer);
+    const startOdometer = Number.isFinite(startOdometerRaw) && startOdometerRaw >= 0 ? startOdometerRaw : 0;
+    const note = String(req.body?.note || '').trim().slice(0, 500);
+    const commercialShippingType = normalizeCommercialShippingType(req.body?.commercialShippingType);
+    const freightOriginAddress = req.body?.freightOriginAddress != null ? String(req.body.freightOriginAddress).trim() || null : null;
+    const freightLoadAddress = req.body?.freightLoadAddress != null ? String(req.body.freightLoadAddress).trim() || null : null;
+    const freightUnloadAddressesRaw = req.body?.freightUnloadAddresses;
+    let freightUnloadAddressesArr = [];
+    if (Array.isArray(freightUnloadAddressesRaw)) {
+      freightUnloadAddressesArr = freightUnloadAddressesRaw.map((x) => String(x).trim()).filter(Boolean);
+    } else if (typeof freightUnloadAddressesRaw === 'string' && freightUnloadAddressesRaw.trim()) {
+      const t = freightUnloadAddressesRaw.trim();
+      try {
+        const parsed = JSON.parse(t);
+        if (Array.isArray(parsed)) freightUnloadAddressesArr = parsed.map((x) => String(x).trim()).filter(Boolean);
+        else freightUnloadAddressesArr = t.split(/\r?\n|;/).map((x) => x.trim()).filter(Boolean);
+      } catch {
+        freightUnloadAddressesArr = t.split(/\r?\n|;/).map((x) => x.trim()).filter(Boolean);
+      }
+    }
+    const freightUnloadAddresses = freightUnloadAddressesArr.length > 0 ? JSON.stringify(freightUnloadAddressesArr) : null;
+    if (!driverUserId || Number.isNaN(driverUserId)) {
+      return res.status(400).json({ error: 'Некорректный driverUserId' });
+    }
+
+    db.get(
+      `SELECT d.id as driverId, d.userId as driverUserId, d.carId
+       FROM drivers d
+       WHERE d.userId = ? AND d.parkId = ?`,
+      [driverUserId, manager.parkId],
+      (dErr, driverRow) => {
+        if (dErr) return res.status(500).json({ error: dErr.message });
+        if (!driverRow) return res.status(404).json({ error: 'Водитель не найден в парке' });
+        if (!driverRow.carId) return res.status(400).json({ error: 'У водителя не привязано авто' });
+
+        db.run(
+          `INSERT INTO shift_plans
+             (parkId, shiftDate, driverUserId, driverId, carId, status, startOdometer, commercialShippingType, freightOriginAddress, freightLoadAddress, freightUnloadAddresses, note, createdByUserId, createdAt, updatedAt)
+           VALUES (?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(parkId, shiftDate, driverUserId) DO UPDATE SET
+             status = 'planned',
+             startOdometer = excluded.startOdometer,
+             commercialShippingType = excluded.commercialShippingType,
+             freightOriginAddress = excluded.freightOriginAddress,
+             freightLoadAddress = excluded.freightLoadAddress,
+             freightUnloadAddresses = excluded.freightUnloadAddresses,
+             note = excluded.note,
+             driverId = excluded.driverId,
+             carId = excluded.carId,
+             createdByUserId = excluded.createdByUserId,
+             cancelledAt = NULL,
+             consumedAt = NULL,
+             consumedByRequestId = NULL,
+             consumedByEplId = NULL,
+             updatedAt = CURRENT_TIMESTAMP`,
+          [
+            manager.parkId,
+            shiftDate,
+            driverUserId,
+            driverRow.driverId,
+            driverRow.carId,
+            startOdometer,
+            commercialShippingType || null,
+            freightOriginAddress,
+            freightLoadAddress,
+            freightUnloadAddresses,
+            note || null,
+            req.user.userId,
+          ],
+          function (uErr) {
+            if (uErr) return res.status(500).json({ error: uErr.message });
+            res.json({ ok: true, id: this.lastID || null, status: 'planned' });
+          }
+        );
+      }
+    );
+  });
+});
+
+router.post('/shift-plans/:id/cancel', authenticateToken, authorizeRole('manager'), (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id || Number.isNaN(id)) return res.status(400).json({ error: 'Некорректный id' });
+  getManagerPark(req, (err, manager) => {
+    if (err || !manager) return res.status(404).json({ error: 'Manager not found' });
+    if (!manager.canAccessBroadcasts) return res.status(403).json({ error: 'Нет доступа к разделу "Смены"' });
+    db.run(
+      `UPDATE shift_plans
+       SET status = 'cancelled', cancelledAt = CURRENT_TIMESTAMP, updatedAt = CURRENT_TIMESTAMP
+       WHERE id = ? AND parkId = ? AND status = 'planned'`,
+      [id, manager.parkId],
+      function (uErr) {
+        if (uErr) return res.status(500).json({ error: uErr.message });
+        if (!this.changes) return res.status(404).json({ error: 'План не найден или уже обработан' });
+        res.json({ ok: true, id, status: 'cancelled' });
+      }
+    );
+  });
+});
 
 // Сменить пароль водителю (менеджер, если включено право)
 router.post('/drivers/:userId/password', authenticateToken, authorizeRole('manager'), (req, res) => {
@@ -2422,13 +2831,15 @@ router.post('/epl/:id/complete-without-driver', authenticateToken, authorizeRole
             const staffList = await new Promise((resolve) => {
               db.all(
                 `SELECT role, fullName, licenseSerial, licenseNumber, licenseDateStart, licenseDateEnd
-                 FROM park_staff WHERE parkId = ? AND role IN ('medic', 'technic')`,
+                 FROM park_staff
+                 WHERE parkId = ? AND role IN ('medic', 'technic') AND COALESCE(isActive,1) = 1
+                 ORDER BY COALESCE(priority,0) DESC, id DESC`,
                 [epl.parkId],
                 (staffErr, rows) => resolve(rows || [])
               );
             });
             staffList.forEach(s => {
-              if (s.role === 'medic') {
+              if (s.role === 'medic' && !medicLicense) {
                 if ((s.fullName || '').trim()) medicName = normalizeFio(s.fullName);
                 if ((s.licenseSerial || '').trim() || (s.licenseNumber || '').trim()) {
                   medicLicense = {
@@ -2439,7 +2850,9 @@ router.post('/epl/:id/complete-without-driver', authenticateToken, authorizeRole
                   };
                 }
               }
-              if (s.role === 'technic' && (s.fullName || '').trim()) authorizedName = normalizeFio(s.fullName);
+              if (s.role === 'technic' && authorizedName === (epl.driverName || 'Механик') && (s.fullName || '').trim()) {
+                authorizedName = normalizeFio(s.fullName);
+              }
             });
 
             try {

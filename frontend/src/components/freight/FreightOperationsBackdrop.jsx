@@ -30,7 +30,7 @@ export default function FreightOperationsBackdrop({ night }) {
         className={`absolute inset-0 transition-all duration-700 ease-out ${
           night
             ? 'bg-gradient-to-b from-slate-950 via-[#0f172a] to-[#0c4a3e]'
-            : 'bg-gradient-to-b from-sky-500 via-sky-300 to-cyan-100'
+            : 'bg-gradient-to-b from-sky-400 via-sky-200 to-cyan-100'
         }`}
       />
 
@@ -38,7 +38,8 @@ export default function FreightOperationsBackdrop({ night }) {
         <>
           {/* Ясный день: слои глубины, дальняя дымка, мягкий горизонт */}
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_100%_60%_at_50%_-15%,rgba(255,255,255,0.65),transparent_55%)]" />
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-sky-200/25 to-emerald-100/45" />
+          <div className="absolute inset-0 bg-gradient-to-b from-sky-100/10 via-sky-200/20 to-emerald-100/35" />
+          <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-slate-900/12 to-transparent" />
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_40%_at_70%_100%,rgba(16,185,129,0.12),transparent_60%)]" />
           <div className="absolute bottom-[35vh] left-0 right-0 h-40 bg-gradient-to-t from-slate-300/30 to-transparent blur-2xl" />
           {/* Солнце + блик */}

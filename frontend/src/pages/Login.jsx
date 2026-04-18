@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Moon, Sun } from 'lucide-react';
@@ -278,8 +278,27 @@ export default function Login() {
   const [currentUser, setCurrentUser] = useState(null);
   const [currentToken, setCurrentToken] = useState(null);
   const [sceneMode, setSceneMode] = useState('night'); // 'day' | 'night'
-  const { login, refreshUser } = useAuth();
+  const { user, loading: authLoading, login, refreshUser } = useAuth();
   const navigate = useNavigate();
+  const getRoleRoute = (role) => {
+    if (role === 'admin') return '/admin';
+    if (role === 'manager') return '/manager';
+    if (role === 'driver') return '/driver';
+    if (role === 'evacuator') return FEATURE_EVACUATOR_AND_COMMISSIONER ? '/evacuator' : '/home';
+    if (role === 'commissioner') return FEATURE_EVACUATOR_AND_COMMISSIONER ? '/commissioner' : '/home';
+    return '/home';
+  };
+
+  // Если пользователь уже авторизован, не показываем форму логина (исправляет "разлогин" по кнопке Back).
+  useEffect(() => {
+    if (authLoading || !user) return;
+    if (user.mustChangePassword || user.firstLogin) {
+      navigate('/change-credentials', { replace: true });
+      return;
+    }
+    navigate(getRoleRoute(user.role), { replace: true });
+  }, [authLoading, user, navigate]);
+
 
   const night = sceneMode === 'night';
 
@@ -304,19 +323,19 @@ export default function Login() {
         setShowFirstLoginModal(true);
         setLoading(false);
       } else if (userData.mustChangePassword) {
-        navigate('/change-credentials');
+        navigate('/change-credentials', { replace: true });
       } else if (userData.role === 'admin') {
-        navigate('/admin');
+        navigate('/admin', { replace: true });
       } else if (userData.role === 'manager') {
-        navigate('/manager');
+        navigate('/manager', { replace: true });
       } else if (userData.role === 'driver') {
-        navigate('/driver');
+        navigate('/driver', { replace: true });
       } else if (userData.role === 'evacuator') {
-        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/evacuator' : '/home');
+        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/evacuator' : '/home', { replace: true });
       } else if (userData.role === 'commissioner') {
-        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/commissioner' : '/home');
+        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/commissioner' : '/home', { replace: true });
       } else {
-        navigate('/home');
+        navigate('/home', { replace: true });
       }
     } catch (err) {
       let msg = err?.response?.data?.error || err?.message || 'Ошибка входа';
@@ -336,17 +355,17 @@ export default function Login() {
     const role = currentUser.role;
     setTimeout(() => {
       if (role === 'admin') {
-        navigate('/admin');
+        navigate('/admin', { replace: true });
       } else if (role === 'manager') {
-        navigate('/manager');
+        navigate('/manager', { replace: true });
       } else if (role === 'driver') {
-        navigate('/driver');
+        navigate('/driver', { replace: true });
       } else if (role === 'evacuator') {
-        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/evacuator' : '/home');
+        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/evacuator' : '/home', { replace: true });
       } else if (role === 'commissioner') {
-        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/commissioner' : '/home');
+        navigate(FEATURE_EVACUATOR_AND_COMMISSIONER ? '/commissioner' : '/home', { replace: true });
       } else {
-        navigate('/home');
+        navigate('/home', { replace: true });
       }
     }, 150);
   };

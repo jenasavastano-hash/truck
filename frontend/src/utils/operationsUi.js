@@ -18,22 +18,22 @@ export function operationsInset(night) {
 /** Верхняя полоса под хедером (менеджер / админ): прозрачное стекло */
 export function operationsHeaderStrip(night) {
   return night
-    ? 'border-b border-white/15 bg-white/[0.08] backdrop-blur-2xl shadow-[0_8px_40px_rgba(15,23,42,0.18)]'
-    : 'border-b border-slate-200/80 bg-white/80 backdrop-blur-xl shadow-sm';
+    ? 'border-b border-white/12 bg-slate-900/35 backdrop-blur-2xl shadow-[0_8px_40px_rgba(15,23,42,0.22)]'
+    : 'border-b border-slate-200/85 bg-white/85 backdrop-blur-xl shadow-sm';
 }
 
 /** Sticky-ряд табов под хедером */
 export function operationsStickyTabsRow(night) {
   return night
-    ? 'border-b border-white/12 bg-white/[0.05] backdrop-blur-2xl shadow-[0_4px_28px_rgba(0,0,0,0.12)] ring-1 ring-white/[0.08]'
-    : 'border-b border-white/35 bg-white/75 backdrop-blur-xl shadow-sm';
+    ? 'border-b border-white/10 bg-slate-950/30 backdrop-blur-2xl shadow-[0_4px_28px_rgba(0,0,0,0.2)]'
+    : 'border-b border-slate-200/70 bg-white/80 backdrop-blur-xl shadow-sm';
 }
 
 /** Неактивная кнопка в табах ночью — стекло, не сплошной slate-800 */
 export function operationsTabInactive(night) {
   return night
-    ? 'text-slate-200 hover:text-white hover:bg-white/[0.08] border border-transparent hover:border-white/15'
-    : 'text-slate-600 hover:text-slate-800 hover:bg-slate-50';
+    ? 'border-white/12 bg-white/[0.04] text-slate-200 hover:text-white hover:bg-white/[0.1] hover:border-white/25'
+    : 'border-slate-200 bg-white text-slate-700 hover:text-slate-900 hover:bg-slate-50';
 }
 
 /** Поля ввода и select в операционных панелях (ночь — тёмное стекло). */

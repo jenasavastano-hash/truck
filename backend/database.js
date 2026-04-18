@@ -340,6 +340,19 @@ const runMigrations = (callback) => {
       // Пользователи
       add('canChangeDriverPassword', 1);
       add('canAccessBroadcasts', 1);
+      // Доступ: управление настройками парка (как в админке, но только своего парка)
+      add('canManageParkSettings', 0);
+      add('canParkSettingsStatusName', 0);
+      add('canParkSettingsTakskom', 0);
+      add('canParkSettingsStaff', 0);
+      add('canParkSettingsFreight', 0);
+      add('canParkSettingsBroadcasts', 0);
+      add('canParkSettingsOwners', 0);
+      add('canParkSettingsBalance', 0);
+      add('canParkSettingsPricing', 0);
+      add('canParkSettingsGame', 0);
+      add('canParkSettingsPhotoControl', 0);
+      add('canParkSettingsServices', 0);
       // Доступ: Касса (финансовый дашборд)
       add('canAccessFinance', 0);
       add('financeShowKassa', 1);
@@ -452,6 +465,7 @@ const runMigrations = (callback) => {
         
         syncedWithTakskom INTEGER DEFAULT 0,
         lastSyncAt DATETIME,
+        eplAccessMode TEXT DEFAULT 'all',
         
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -527,12 +541,13 @@ const runMigrations = (callback) => {
         licenseNumber TEXT,
         licenseDateStart TEXT,
         licenseDateEnd TEXT,
+        isActive INTEGER DEFAULT 1,
+        priority INTEGER DEFAULT 0,
         
         createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
         
-        FOREIGN KEY(parkId) REFERENCES parks(id) ON DELETE CASCADE,
-        UNIQUE(parkId, role)
+        FOREIGN KEY(parkId) REFERENCES parks(id) ON DELETE CASCADE
       )
     `);
 
@@ -561,6 +576,8 @@ const runMigrations = (callback) => {
 
       const hasTaxcomLogin = cols && cols.some(c => c.name === 'taxcomLogin');
       const hasTaxcomPassword = cols && cols.some(c => c.name === 'taxcomPassword');
+      const hasIsActive = cols && cols.some(c => c.name === 'isActive');
+      const hasPriority = cols && cols.some(c => c.name === 'priority');
       if (!hasTaxcomLogin) {
         db.run(`ALTER TABLE park_staff ADD COLUMN taxcomLogin TEXT`, (e) => {
           if (!e) console.log('Migrated park_staff: added taxcomLogin column');
@@ -571,6 +588,70 @@ const runMigrations = (callback) => {
           if (!e) console.log('Migrated park_staff: added taxcomPassword column');
         });
       }
+      if (!hasIsActive) {
+        db.run(`ALTER TABLE park_staff ADD COLUMN isActive INTEGER DEFAULT 1`, (e) => {
+          if (!e) console.log('Migrated park_staff: added isActive column');
+        });
+      }
+      if (!hasPriority) {
+        db.run(`ALTER TABLE park_staff ADD COLUMN priority INTEGER DEFAULT 0`, (e) => {
+          if (!e) console.log('Migrated park_staff: added priority column');
+        });
+      }
+    });
+
+    db.get(`SELECT sql FROM sqlite_master WHERE type='table' AND name='park_staff'`, [], (psErr, psRow) => {
+      if (psErr || !psRow || !psRow.sql) return;
+      const sqlLower = String(psRow.sql).toLowerCase();
+      if (!sqlLower.includes('unique(parkid, role)') && !sqlLower.includes('unique (parkid, role)')) {
+        return;
+      }
+      db.run(`ALTER TABLE park_staff RENAME TO park_staff_old_unique`, (renErr) => {
+        if (renErr) return;
+        db.run(
+          `CREATE TABLE IF NOT EXISTS park_staff (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parkId INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('medic', 'technic', 'dispatcher')),
+            fullName TEXT NOT NULL,
+            firstName TEXT,
+            lastName TEXT,
+            secondName TEXT,
+            position TEXT NOT NULL,
+            phone TEXT,
+            email TEXT,
+            authorityBasis TEXT,
+            licenseSerial TEXT,
+            licenseNumber TEXT,
+            licenseDateStart TEXT,
+            licenseDateEnd TEXT,
+            taxcomLogin TEXT,
+            taxcomPassword TEXT,
+            isActive INTEGER DEFAULT 1,
+            priority INTEGER DEFAULT 0,
+            createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(parkId) REFERENCES parks(id) ON DELETE CASCADE
+          )`,
+          (createErr) => {
+            if (createErr) return;
+            db.run(
+              `INSERT INTO park_staff
+                 (id, parkId, role, fullName, firstName, lastName, secondName, position, phone, email, authorityBasis,
+                  licenseSerial, licenseNumber, licenseDateStart, licenseDateEnd, taxcomLogin, taxcomPassword, isActive, priority, createdAt, updatedAt)
+               SELECT id, parkId, role, fullName, firstName, lastName, secondName, position, phone, email, authorityBasis,
+                      licenseSerial, licenseNumber, licenseDateStart, licenseDateEnd, NULL, NULL,
+                      1, 0, createdAt, updatedAt
+               FROM park_staff_old_unique`,
+              (copyErr) => {
+                if (copyErr) return;
+                db.run(`DROP TABLE park_staff_old_unique`, () => {});
+                console.log('Migrated park_staff: removed UNIQUE(parkId, role), added active/priority model');
+              }
+            );
+          }
+        );
+      });
     });
 
     // Миграция: убрать UNIQUE с parks.takskornId (чтобы несколько парков могли использовать один Такском-парк)
@@ -584,7 +665,7 @@ const runMigrations = (callback) => {
       if (!hasUniqueTakskornId) return;
       db.all(`PRAGMA table_info(parks)`, [], (err2, cols) => {
         if (err2 || !cols || cols.length === 0) return;
-        const newTableCols = ['id','name','address','postalIndex','region','regionCode','city','street','house','ogrn','inn','kpp','takskornId','takskornPassword','memberId','phone','email','district','locality','housing','flat','syncedWithTakskom','lastSyncAt','eplCreationMode','balanceDeductionOrder','isActive','createdAt','updatedAt'];
+        const newTableCols = ['id','name','address','postalIndex','region','regionCode','city','street','house','ogrn','inn','kpp','takskornId','takskornPassword','memberId','phone','email','district','locality','housing','flat','syncedWithTakskom','lastSyncAt','eplCreationMode','eplAccessMode','balanceDeductionOrder','isActive','createdAt','updatedAt'];
         const colNames = cols.map(c => c.name).filter(n => newTableCols.includes(n)).join(', ');
         if (!colNames) return;
         db.run('PRAGMA foreign_keys = OFF', (e1) => {
@@ -602,6 +683,7 @@ const runMigrations = (callback) => {
                 phone TEXT, email TEXT, district TEXT, locality TEXT, housing TEXT, flat TEXT,
                 syncedWithTakskom INTEGER DEFAULT 0, lastSyncAt DATETIME,
                 eplCreationMode TEXT DEFAULT 'clinic_api',
+                eplAccessMode TEXT DEFAULT 'all',
                 balanceDeductionOrder TEXT DEFAULT 'real_first',
                 isActive INTEGER DEFAULT 0,
                 createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -668,6 +750,7 @@ const runMigrations = (callback) => {
       const hasRegionCode = cols && cols.some(c => c.name === 'regionCode');
       const hasEplCreationMode = cols && cols.some(c => c.name === 'eplCreationMode');
       const hasEplPrintMode = cols && cols.some(c => c.name === 'eplPrintMode');
+      const hasEplAccessMode = cols && cols.some(c => c.name === 'eplAccessMode');
       
       if (!hasOgrn) {
         db.run(`ALTER TABLE parks ADD COLUMN ogrn TEXT`, (e) => {
@@ -697,6 +780,11 @@ const runMigrations = (callback) => {
       if (!hasEplPrintMode) {
         db.run(`ALTER TABLE parks ADD COLUMN eplPrintMode TEXT DEFAULT 'our_then_taxcom'`, (e) => {
           if (!e) console.log('Migrated parks: added eplPrintMode column');
+        });
+      }
+      if (!hasEplAccessMode) {
+        db.run(`ALTER TABLE parks ADD COLUMN eplAccessMode TEXT DEFAULT 'all'`, (e) => {
+          if (!e) console.log('Migrated parks: added eplAccessMode column');
         });
       }
       const hasBalanceDeductionOrder = cols && cols.some(c => c.name === 'balanceDeductionOrder');
@@ -819,6 +907,7 @@ const runMigrations = (callback) => {
         takskornId TEXT UNIQUE,
         syncedWithTakskom INTEGER DEFAULT 0,
         lastSyncAt DATETIME,
+        eplAccessOverride TEXT DEFAULT 'default',
         
         isVerified INTEGER DEFAULT 0,
         carId INTEGER,
@@ -2039,6 +2128,107 @@ const runMigrations = (callback) => {
     db.run(`CREATE INDEX IF NOT EXISTS idx_shifts_status ON shifts(status)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_shifts_parkId ON shifts(parkId)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created ON notifications(userId, readAt, createdAt)`);
+
+    db.all(`PRAGMA table_info(drivers)`, [], (driversColsErr, driversCols) => {
+      if (driversColsErr || !driversCols) return;
+      const hasEplAccessOverride = driversCols.some((c) => c.name === 'eplAccessOverride');
+      if (!hasEplAccessOverride) {
+        db.run(`ALTER TABLE drivers ADD COLUMN eplAccessOverride TEXT DEFAULT 'default'`, (e) => {
+          if (e) {
+            const msg = e.message || '';
+            if (!/duplicate column name/i.test(msg)) {
+              console.warn('Failed to add drivers.eplAccessOverride:', msg);
+            }
+          } else {
+            console.log('Migrated drivers: added eplAccessOverride column');
+          }
+        });
+      }
+    });
+
+    db.run(
+      `CREATE TABLE IF NOT EXISTS shift_open_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parkId INTEGER NOT NULL,
+        driverUserId INTEGER NOT NULL,
+        driverId INTEGER,
+        carId INTEGER,
+        message TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        startOdometer REAL,
+        startFuel REAL,
+        commercialShippingType TEXT,
+        freightOriginAddress TEXT,
+        freightLoadAddress TEXT,
+        freightUnloadAddresses TEXT,
+        rejectionReason TEXT,
+        requestedByUserId INTEGER,
+        processedByUserId INTEGER,
+        processedByRole TEXT,
+        resultEplId INTEGER,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      (e) => {
+        if (e) console.warn('[DB] shift_open_requests create:', e.message);
+      }
+    );
+    db.run(
+      `CREATE INDEX IF NOT EXISTS idx_shift_open_requests_park_status
+       ON shift_open_requests(parkId, status, createdAt DESC)`,
+      (e) => {
+        if (e) console.warn('[DB] idx_shift_open_requests_park_status:', e.message);
+      }
+    );
+    db.run(
+      `CREATE INDEX IF NOT EXISTS idx_shift_open_requests_driver_status
+       ON shift_open_requests(driverUserId, status, createdAt DESC)`,
+      (e) => {
+        if (e) console.warn('[DB] idx_shift_open_requests_driver_status:', e.message);
+      }
+    );
+    db.run(
+      `CREATE TABLE IF NOT EXISTS shift_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        parkId INTEGER NOT NULL,
+        shiftDate TEXT NOT NULL,
+        driverUserId INTEGER NOT NULL,
+        driverId INTEGER,
+        carId INTEGER,
+        status TEXT NOT NULL DEFAULT 'planned',
+        startOdometer REAL,
+        startFuel REAL,
+        commercialShippingType TEXT,
+        freightOriginAddress TEXT,
+        freightLoadAddress TEXT,
+        freightUnloadAddresses TEXT,
+        note TEXT,
+        createdByUserId INTEGER,
+        consumedByRequestId INTEGER,
+        consumedByEplId INTEGER,
+        consumedAt DATETIME,
+        cancelledAt DATETIME,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`,
+      (e) => {
+        if (e) console.warn('[DB] shift_plans create:', e.message);
+      }
+    );
+    db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_shift_plans_unique_driver_day
+       ON shift_plans(parkId, shiftDate, driverUserId)`,
+      (e) => {
+        if (e) console.warn('[DB] idx_shift_plans_unique_driver_day:', e.message);
+      }
+    );
+    db.run(
+      `CREATE INDEX IF NOT EXISTS idx_shift_plans_park_date_status
+       ON shift_plans(parkId, shiftDate, status, createdAt DESC)`,
+      (e) => {
+        if (e) console.warn('[DB] idx_shift_plans_park_date_status:', e.message);
+      }
+    );
     
     // Миграция: добавление UNIQUE constraint на drivers.carId (1 водитель = 1 авто)
     // SQLite не поддерживает ALTER TABLE ADD CONSTRAINT, поэтому используем UNIQUE индекс

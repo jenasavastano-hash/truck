@@ -8,6 +8,11 @@ export default function DriverCard({ driver, onClick, onBalanceClick, onBindCar,
   const displayName = driver.fullName || driver.phone || 'Без имени';
   const balance = driver.balance || 0;
   const hasLowBalance = balance < 25;
+  const eplAccessOverride = driver.eplAccessOverride === 'force_allow'
+    ? 'force_allow'
+    : driver.eplAccessOverride === 'force_deny'
+      ? 'force_deny'
+      : 'default';
 
   const iconBox = isVerified
     ? night
@@ -86,6 +91,27 @@ export default function DriverCard({ driver, onClick, onBalanceClick, onBindCar,
             }`}
           >
             {isVerified ? '✓ Верифицирован' : '⚠ Не верифицирован'}
+          </div>
+          <div
+            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium mt-1 ${
+              eplAccessOverride === 'force_allow'
+                ? night
+                  ? 'bg-emerald-500/15 text-emerald-200'
+                  : 'bg-emerald-100 text-emerald-700'
+                : eplAccessOverride === 'force_deny'
+                  ? night
+                    ? 'bg-rose-500/15 text-rose-200'
+                    : 'bg-rose-100 text-rose-700'
+                  : night
+                    ? 'bg-slate-700/50 text-slate-200'
+                    : 'bg-slate-100 text-slate-700'
+            }`}
+          >
+            {eplAccessOverride === 'force_allow'
+              ? 'ЭПЛ: доступ всегда'
+              : eplAccessOverride === 'force_deny'
+                ? 'ЭПЛ: запрет'
+                : 'ЭПЛ: по парку'}
           </div>
         </div>
       </div>

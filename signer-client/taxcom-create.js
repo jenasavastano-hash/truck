@@ -28,6 +28,50 @@ function getPlaywright() {
 }
 
 const SCREENSHOTS_ERR_HINT = 'При ошибке смотри скриншоты в screenshots/ — последние по времени от этого запуска.';
+const EXTENSION_SAFE_IGNORE_DEFAULT_ARGS = [
+  '--disable-extensions',
+  '--disable-component-extensions-with-background-pages',
+  '--disable-component-update',
+];
+
+function cleanupProfileTransientFiles(userDataDir, roleTag = 'Taxcom') {
+  if (!userDataDir) return;
+  const transientNames = [
+    'SingletonLock',
+    'SingletonCookie',
+    'SingletonSocket',
+    'DevToolsActivePort',
+    'chrome_debug.log',
+  ];
+  for (const name of transientNames) {
+    const target = path.join(userDataDir, name);
+    try {
+      if (fs.existsSync(target)) {
+        fs.rmSync(target, { force: true, recursive: true });
+        console.log(`[Taxcom] [${roleTag}] cleanup: удалён ${name}`);
+      }
+    } catch (err) {
+      console.warn(`[Taxcom] [${roleTag}] cleanup ${name}: ${err.message}`);
+    }
+  }
+}
+
+async function launchPersistentContextWithRecovery(chromium, userDataDir, options, roleTag = 'Taxcom') {
+  const retries = Math.max(1, Number(process.env.TAXCOM_PROFILE_LAUNCH_RETRIES || 3));
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await chromium.launchPersistentContext(userDataDir, options);
+    } catch (err) {
+      const msg = String(err && err.message ? err.message : err);
+      const last = attempt >= retries;
+      console.warn(`[Taxcom] [${roleTag}] launchPersistentContext attempt ${attempt}/${retries} failed: ${msg}`);
+      cleanupProfileTransientFiles(userDataDir, roleTag);
+      if (last) throw err;
+      await new Promise((r) => setTimeout(r, 1200 * attempt));
+    }
+  }
+  return null;
+}
 
 /** Клик по видимой кнопке «Сохранить» (не по скрытому input[name="save"]). */
 async function clickVisibleSaveBtn(page) {
@@ -94,7 +138,7 @@ function resolveCommercialShippingEnv(item, baseEnv) {
     ОД: 'групп детей',
   };
   const fallbackMessage = {
-    ПГ: 'пригород',
+    ПГ: 'городск',
     РП: 'городск',
     ЗП: 'городск',
     ТЛ: 'городск',
@@ -162,6 +206,114 @@ function logFreightAddressesForWaybill(item) {
   console.log('[Taxcom] Адреса грузового рейса (из заявки):', JSON.stringify({ originAddress, loadAddress, unloadAddresses: unloads }, null, 0));
 }
 
+function hasText(v) {
+  return String(v || '').trim().length > 0;
+}
+
+function short(v, max = 72) {
+  const s = String(v || '').trim();
+  if (!s) return '—';
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function boolMark(ok) {
+  return ok ? 'OK' : 'MISS';
+}
+
+function buildEplPreflight(item, env) {
+  const i = item || {};
+  const d = i.driver || {};
+  const st = i.staff || {};
+  const owner = d.owner || {};
+  const route = i.freightAddresses || {};
+  const unloads = Array.isArray(route.unloadAddresses) ? route.unloadAddresses.map((x) => String(x).trim()).filter(Boolean) : [];
+  const isFreight = String(i.commercialShippingType || '').toUpperCase() === 'ПГ';
+
+  const dispatcherCreds = hasText(env?.TAKSKOM_DISPATCHER_PHONE || env?.TAKSKOM_LOGIN_PHONE) && hasText(env?.TAKSKOM_DISPATCHER_PASSWORD || env?.TAKSKOM_LOGIN_PASSWORD);
+  const medicCreds = hasText(env?.TAKSKOM_MEDIC_PHONE) && hasText(env?.TAKSKOM_MEDIC_PASSWORD);
+  const mechanicCreds = hasText(env?.TAKSKOM_MECHANIC_PHONE) && hasText(env?.TAKSKOM_MECHANIC_PASSWORD);
+
+  const checks = {
+    driver: [
+      ['ФИО', hasText(d.fullName), short(d.fullName)],
+      ['ИНН', hasText(d.inn), short(d.inn)],
+      ['ВУ серия', hasText(d.licenseSerial), short(d.licenseSerial)],
+      ['ВУ номер', hasText(d.licenseNumber), short(d.licenseNumber)],
+      ['Дата ВУ', hasText(d.licenseDate), short(d.licenseDate)],
+    ],
+    car: [
+      ['Госномер', hasText(d.regNumber), short(d.regNumber)],
+      ['Марка', hasText(d.brand), short(d.brand)],
+      ['Модель', hasText(d.model), short(d.model)],
+      ['VIN', hasText(d.vin), short(d.vin)],
+      ['Тип ТС', hasText(d.vehicleType), short(d.vehicleType)],
+    ],
+    owner: [
+      ['Наименование', hasText(owner.name), short(owner.name)],
+      ['ИНН', hasText(owner.inn), short(owner.inn)],
+      ['КПП', hasText(owner.kpp), short(owner.kpp)],
+      ['ОГРН/ОГРНИП', hasText(owner.ogrn || owner.ogrnip), short(owner.ogrn || owner.ogrnip)],
+    ],
+    staff: [
+      ['Диспетчер ФИО', hasText(st.dispatcher?.fullName), short(st.dispatcher?.fullName)],
+      ['Диспетчер должность', hasText(st.dispatcher?.position), short(st.dispatcher?.position)],
+      ['Диспетчер логин/пароль', dispatcherCreds, dispatcherCreds ? 'ok' : 'env missing'],
+      ['Медик ФИО', hasText(st.medic?.fullName), short(st.medic?.fullName)],
+      ['Медик должность', hasText(st.medic?.position), short(st.medic?.position)],
+      ['Медик логин/пароль', medicCreds, medicCreds ? 'ok' : 'env missing'],
+      ['Механик ФИО', hasText(st.technic?.fullName), short(st.technic?.fullName)],
+      ['Механик должность', hasText(st.technic?.position), short(st.technic?.position)],
+      ['Механик логин/пароль', mechanicCreds, mechanicCreds ? 'ok' : 'env missing'],
+    ],
+    route: [
+      ['Отправление', hasText(route.originAddress), short(route.originAddress)],
+      ['Погрузка', hasText(route.loadAddress), short(route.loadAddress)],
+      ['Кол-во выгрузок', unloads.length > 0, String(unloads.length)],
+    ],
+  };
+
+  const blocks = Object.entries(checks).map(([block, rows]) => {
+    const missing = rows.filter(([, ok]) => !ok).map(([label]) => label);
+    return { block, rows, missing };
+  });
+
+  const missingCritical = [];
+  blocks.forEach((b) => {
+    // Для грузовых рейсов считаем маршрут критичным, для остальных — informational.
+    if (b.block === 'route' && !isFreight) return;
+    b.missing.forEach((m) => missingCritical.push(`${b.block}.${m}`));
+  });
+
+  return {
+    isFreight,
+    meta: {
+      eplId: i.eplId,
+      waybill: i.waybillNumber || '—',
+      commercialType: i.commercialShippingType || '—',
+      mintransId: i.mintransId || '—',
+    },
+    blocks,
+    missingCritical,
+  };
+}
+
+function logEplPreflight(report) {
+  if (!report) return;
+  const { meta, blocks, missingCritical, isFreight } = report;
+  console.log(`[Taxcom][Preflight] EPL #${meta.eplId} | WB=${meta.waybill} | type=${meta.commercialType} | mintransId=${meta.mintransId}`);
+  blocks.forEach((b) => {
+    console.log(`[Taxcom][Preflight] [${b.block}]`);
+    b.rows.forEach(([label, ok, value]) => {
+      console.log(`  - ${boolMark(ok)} ${label}: ${value}`);
+    });
+  });
+  if (missingCritical.length > 0) {
+    console.warn(`[Taxcom][Preflight] Missing fields (${isFreight ? 'critical for freight' : 'check before submit'}): ${missingCritical.join('; ')}`);
+  } else {
+    console.log('[Taxcom][Preflight] All key fields are present.');
+  }
+}
+
 /**
  * Заполнение полей поиска адреса на форме создания ЭПЛ (/waybill/new/): место отправления,
  * первая пара «погрузка / выгрузка», дальше — кнопка «Добавить» и последнее поле ввода = следующая выгрузка.
@@ -170,16 +322,29 @@ function logFreightAddressesForWaybill(item) {
  */
 async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
   const e = { ...(env || {}), ...(process.env || {}) };
-  if (/^(1|true|yes)$/i.test(String(e.TAXCOM_SKIP_ADDRESS_AUTOFILL || '').trim())) return;
+  if (/^(1|true|yes)$/i.test(String(e.TAXCOM_SKIP_ADDRESS_AUTOFILL || '').trim())) {
+    return { skipped: true, expected: null, filled: null };
+  }
 
   const f = item && item.freightAddresses;
-  if (!f || typeof f !== 'object') return;
+  if (!f || typeof f !== 'object') return { skipped: true, expected: null, filled: null };
 
   const origin = String(f.originAddress || '').trim();
   const load = String(f.loadAddress || '').trim();
   const unloads = Array.isArray(f.unloadAddresses) ? f.unloadAddresses.map((x) => String(x).trim()).filter(Boolean) : [];
 
-  if (!origin && !load && unloads.length === 0) return;
+  const expected = {
+    origin: !!origin,
+    load: !!load,
+    unloadCount: unloads.length,
+  };
+  const filled = {
+    origin: false,
+    load: false,
+    unloadCount: 0,
+  };
+
+  if (!origin && !load && unloads.length === 0) return { skipped: true, expected, filled };
 
   let formScope = page.locator('#title_form').first();
   if ((await formScope.count()) === 0) {
@@ -197,68 +362,518 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
       inputs = page.locator('input[placeholder*="Введите"], textarea[placeholder*="Введите"]');
     }
 
+    const originCtxRe = /(место\s*отправ|пункт\s*отправ|адрес\s*отправ)/i;
+    const routeCtxRe = /(погруз|выгруз|адреса\s*пунктов|пунктов\s*погрузки|пунктов\s*выгрузки)/i;
+    const parsedLayout = {
+      originIndex: -1,
+      routeIndices: [],
+      dump: [],
+    };
+
+    const readInputContext = async (loc) => {
+      return await loc.evaluate((el) => {
+        const collect = (node) => String((node && node.textContent) || '').replace(/\s+/g, ' ').trim();
+        const own = collect(el);
+        const attrs = [el.getAttribute('name') || '', el.getAttribute('id') || '', el.getAttribute('placeholder') || ''].join(' | ');
+        let parentText = '';
+        let cur = el;
+        for (let i = 0; i < 5; i++) {
+          cur = cur && cur.parentElement;
+          if (!cur) break;
+          const t = collect(cur);
+          if (t && t.length > parentText.length) parentText = t;
+        }
+        return `${attrs} || ${own} || ${parentText}`.toLowerCase();
+      }).catch(() => '');
+    };
+
+    try {
+      const cnt = await inputs.count();
+      for (let i = 0; i < cnt; i++) {
+        const loc = inputs.nth(i);
+        const visible = await loc.isVisible().catch(() => false);
+        if (!visible) continue;
+        const disabled = await loc.isDisabled().catch(() => false);
+        if (disabled) continue;
+        const ctx = await readInputContext(loc);
+        parsedLayout.dump.push({ i, ctx: ctx.slice(0, 220) });
+        if (parsedLayout.originIndex < 0 && originCtxRe.test(ctx)) {
+          parsedLayout.originIndex = i;
+        }
+        if (routeCtxRe.test(ctx)) {
+          parsedLayout.routeIndices.push(i);
+        }
+      }
+      if (parsedLayout.routeIndices.length === 0) {
+        const fallbackCnt = await inputs.count();
+        for (let i = 0; i < fallbackCnt; i++) {
+          if (i === parsedLayout.originIndex) continue;
+          parsedLayout.routeIndices.push(i);
+        }
+      }
+      parsedLayout.routeIndices = [...new Set(parsedLayout.routeIndices)].filter((i) => i !== parsedLayout.originIndex);
+      console.log(`[Taxcom][AddrParser] originIndex=${parsedLayout.originIndex} routeIndices=${parsedLayout.routeIndices.join(',') || 'none'}`);
+    } catch (parseErr) {
+      console.warn('[Taxcom][AddrParser] parse layout failed:', parseErr.message);
+    }
+
+    const pickAddressSuggestion = async (loc, typedText, label) => {
+      if (!loc || !typedText) return false;
+      const typed = String(typedText).trim();
+      if (!typed) return false;
+
+      const isSelectionCommitted = async () => {
+        const currentValue = String((await loc.inputValue().catch(() => '')) || '').trim();
+        if (!currentValue) return false;
+        const menuVisible = await page.locator('ul.autocomplete-menu:visible, .autocomplete-menu:visible, .dropdown-menu.show:visible, [role="listbox"]:visible').count().catch(() => 0);
+        const ariaExpanded = await loc.getAttribute('aria-expanded').catch(() => null);
+        if (menuVisible === 0) return true;
+        if (ariaExpanded && String(ariaExpanded).toLowerCase() === 'false') return true;
+        return false;
+      };
+
+      // Сначала пробуем клик по dropdown Такском.
+      try {
+        await page.waitForTimeout(260);
+        const esc = typed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const cssValue = typed.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const menuId = await loc.getAttribute('aria-controls').catch(() => null);
+        const menuScopedItems = menuId
+          ? page.locator(`#${menuId} a, #${menuId} [role="menuitem"], #${menuId} [data-label], #${menuId} li`)
+          : page.locator('ul.autocomplete-menu a, ul.autocomplete-menu [data-label], .autocomplete-menu a, .autocomplete-menu [data-label], .dropdown-menu.show a.dropdown-item, a.dropdown-item[data-label], .ui-autocomplete li, [role="listbox"] [role="option"]');
+        await menuScopedItems.first().waitFor({ state: 'visible', timeout: 1800 }).catch(() => {});
+
+        const tryClickItem = async (cand, tag) => {
+          const count = await cand.count().catch(() => 0);
+          if (!count) return false;
+          const first = cand.first();
+          if (!(await first.isVisible().catch(() => false))) return false;
+          await first.scrollIntoViewIfNeeded().catch(() => {});
+          await first.click({ timeout: 2500 }).catch(() => first.click({ timeout: 2500, force: true }).catch(() => {}));
+          await page.waitForTimeout(260);
+          if (!(await isSelectionCommitted())) return false;
+          console.log(`[Taxcom] ✓ ${label}: выбран вариант из dropdown (${tag})`);
+          return true;
+        };
+
+        // 1) Точное совпадение по data-label
+        const exactByDataLabel = menuId
+          ? page.locator(`#${menuId} a[data-label="${cssValue}"]`)
+          : page.locator(`ul.autocomplete-menu a[data-label="${cssValue}"]`);
+        if (await tryClickItem(exactByDataLabel, 'data-label exact')) return true;
+
+        // 2) Точное совпадение по тексту
+        const exactByText = menuScopedItems.filter({ hasText: new RegExp(`^\\s*${esc}\\s*$`, 'i') });
+        if (await tryClickItem(exactByText, 'text exact')) return true;
+
+        // 3) Начинается с ввода
+        const startsWith = menuScopedItems.filter({ hasText: new RegExp(`^\\s*${esc}`, 'i') });
+        if (await tryClickItem(startsWith, 'text startsWith')) return true;
+
+        // 4) Любое вхождение
+        const contains = menuScopedItems.filter({ hasText: new RegExp(esc, 'i') });
+        if (await tryClickItem(contains, 'text contains')) return true;
+
+        // 5) Любой первый видимый пункт (список мог быть сверху/снизу и с нестандартным текстом)
+        if (await tryClickItem(menuScopedItems, 'menu first visible')) return true;
+      } catch (_) {}
+
+      // Фолбэк: попытка кликнуть видимый вариант в списке (сверху/снизу — не важно).
+      try {
+        const esc = typed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const optionCandidates = [
+          page.locator('[role="option"]'),
+          page.locator('[role="listbox"] [role="option"]'),
+          page.locator('.ui-menu-item'),
+          page.locator('.ui-autocomplete li'),
+          page.locator('li[class*="suggest"]'),
+          page.locator('div[class*="suggest"]'),
+          page.locator('div[class*="autocomplete"] li'),
+          page.locator('ul[class*="autocomplete"] li'),
+        ];
+
+        for (const cand of optionCandidates) {
+          const count = await cand.count().catch(() => 0);
+          if (!count) continue;
+
+          const exact = cand.filter({ hasText: new RegExp(`^\\s*${esc}\\s*$`, 'i') }).first();
+          if ((await exact.count().catch(() => 0)) > 0 && (await exact.isVisible().catch(() => false))) {
+            await exact.scrollIntoViewIfNeeded().catch(() => {});
+            await exact.click({ timeout: 2000 }).catch(() => exact.click({ timeout: 2000, force: true }).catch(() => {}));
+            await page.waitForTimeout(250);
+            if (!(await isSelectionCommitted())) continue;
+            console.log(`[Taxcom] ✓ ${label}: выбран вариант из списка (точное совпадение)`);
+            return true;
+          }
+
+          const startsWith = cand.filter({ hasText: new RegExp(`^\\s*${esc}`, 'i') }).first();
+          if ((await startsWith.count().catch(() => 0)) > 0 && (await startsWith.isVisible().catch(() => false))) {
+            await startsWith.scrollIntoViewIfNeeded().catch(() => {});
+            await startsWith.click({ timeout: 2000 }).catch(() => startsWith.click({ timeout: 2000, force: true }).catch(() => {}));
+            await page.waitForTimeout(250);
+            if (!(await isSelectionCommitted())) continue;
+            console.log(`[Taxcom] ✓ ${label}: выбран вариант из списка (по префиксу)`);
+            return true;
+          }
+
+          const firstVisible = cand.first();
+          if ((await firstVisible.count().catch(() => 0)) > 0 && (await firstVisible.isVisible().catch(() => false))) {
+            await firstVisible.scrollIntoViewIfNeeded().catch(() => {});
+            await firstVisible.click({ timeout: 2000 }).catch(() => firstVisible.click({ timeout: 2000, force: true }).catch(() => {}));
+            await page.waitForTimeout(250);
+            if (!(await isSelectionCommitted())) continue;
+            console.log(`[Taxcom] ✓ ${label}: выбран первый видимый вариант`);
+            return true;
+          }
+        }
+      } catch (_) {}
+
+      // Клавиатурный fallback: пробуем несколько раз даже если меню "капризничает".
+      try {
+        for (let i = 0; i < 3; i++) {
+          await loc.click({ timeout: 800 }).catch(() => {});
+          await loc.press('ArrowDown', { timeout: 1200 }).catch(() => {});
+          await page.waitForTimeout(120);
+          await loc.press('Enter', { timeout: 1200 }).catch(() => {});
+          await page.waitForTimeout(240);
+          if (await isSelectionCommitted()) {
+            console.log(`[Taxcom] ✓ ${label}: выбран из видимого списка (ArrowDown+Enter)`);
+            return true;
+          }
+        }
+      } catch (_) {}
+
+      console.warn(`[Taxcom] ⚠ ${label}: не удалось выбрать адрес из выпадающего списка`);
+      return false;
+    };
+
     const safeFillNthGlobal = async (n, text, label) => {
       if (!text) return false;
       const loc = inputs.nth(n);
       if ((await loc.count()) === 0) return false;
       const vis = await loc.isVisible().catch(() => false);
       if (!vis) return false;
+      await enableFullAddressForInput(loc, label).catch(() => {});
       await loc.scrollIntoViewIfNeeded().catch(() => {});
       await loc.click({ timeout: 8000 }).catch(() => {});
-      await loc.fill('');
-      await loc.fill(text);
-      await page.waitForTimeout(220);
+      try {
+        await loc.fill('');
+        await loc.type(text, { delay: 20 }).catch(async () => {
+          await loc.fill(text);
+        });
+      } catch (e) {
+        console.warn(`[Taxcom] ⚠ ${label}: не удалось ввести текст в поле #${n}: ${e.message}`);
+        return false;
+      }
+      await page.waitForTimeout(320);
+      const picked = await pickAddressSuggestion(loc, text, label);
+      if (!picked) {
+        const currentValue = String((await loc.inputValue().catch(() => '')) || '').trim();
+        if (!currentValue) return false;
+        console.log(`[Taxcom] ✓ ${label}: введено без dropdown (поле #${n})`);
+      }
       console.log(`[Taxcom] ✓ ${label} (поле #${n} среди «Введите…»)`);
       return true;
     };
 
-    let idx = 0;
-
-    if (origin) {
-      const ok = await safeFillNthGlobal(idx, origin, 'Место отправления');
-      if (ok) idx += 1;
-    }
-
-    if (load) {
-      const ok = await safeFillNthGlobal(idx, load, 'Погрузка (первая пара)');
-      if (ok) idx += 1;
-    }
-
-    if (unloads.length > 0) {
-      const ok = await safeFillNthGlobal(idx, unloads[0], 'Выгрузка (первая пара)');
-      if (ok) idx += 1;
-    }
-
-    for (let seg = 1; seg < unloads.length; seg++) {
-      const addBtn = formScope.getByRole('button', { name: /^Добавить$/i }).first();
-      if ((await addBtn.count()) > 0 && (await addBtn.isVisible().catch(() => false))) {
-        await addBtn.click().catch(() => {});
-        await page.waitForTimeout(750);
-      } else {
-        const addBtnPage = page.getByRole('button', { name: /^Добавить$/i }).first();
-        if ((await addBtnPage.count()) > 0 && (await addBtnPage.isVisible().catch(() => false))) {
-          await addBtnPage.click().catch(() => {});
-          await page.waitForTimeout(750);
-        } else {
-          console.warn('[Taxcom] ⚠ Кнопка «Добавить» не найдена — дальнейшие выгрузки не заполнены');
-          break;
+    const fillCommercialPersonFullAddress = async (text, label) => {
+      const v = String(text || '').trim();
+      if (!v) return false;
+      // На некоторых формах поле полного адреса скрыто до включения checkbox "Полный адрес".
+      await clickFullAddressByForId('commercial_type', label).catch(() => {});
+      await clickFullAddressByForId('commercial_person_type', label).catch(() => {});
+      let loc = page.locator('#COMMERCIAL_PERSON_ADDRESS_INFO, input[name="COMMERCIAL_PERSON_ADDRESS_INFO"]').first();
+      if ((await loc.count()) === 0 || !(await loc.isVisible().catch(() => false))) {
+        loc = page.locator('#COMMERCIAL_ADDRESS_INFO, input[name="COMMERCIAL_ADDRESS_INFO"]').first();
+      }
+      if ((await loc.count()) === 0 || !(await loc.isVisible().catch(() => false))) return false;
+      await enableFullAddressForInput(loc, label).catch(() => {});
+      await loc.scrollIntoViewIfNeeded().catch(() => {});
+      await loc.click({ timeout: 8000 }).catch(() => {});
+      try {
+        await loc.fill('');
+        await loc.type(v, { delay: 20 }).catch(async () => {
+          await loc.fill(v);
+        });
+      } catch (e) {
+        // Фолбэк, когда Playwright видит поле "не редактируемым" из-за перерисовки.
+        const jsFilled = await loc.evaluate((el, value) => {
+          if (!el) return false;
+          el.focus();
+          el.value = '';
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.value = value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+          return String(el.value || '').trim().length > 0;
+        }, v).catch(() => false);
+        if (!jsFilled) {
+          console.warn(`[Taxcom] ⚠ ${label}: не удалось ввести полный адрес: ${e.message}`);
+          return false;
         }
       }
+      await page.waitForTimeout(320);
+      const picked = await pickAddressSuggestion(loc, v, `${label} (COMMERCIAL_PERSON_ADDRESS_INFO)`);
+      if (!picked) {
+        const currentValue = String((await loc.inputValue().catch(() => '')) || '').trim();
+        if (!currentValue) return false;
+        console.log(`[Taxcom] ✓ ${label}: COMMERCIAL_PERSON_ADDRESS_INFO заполнен без dropdown`);
+      }
+      console.log(`[Taxcom] ✓ ${label}: заполнено поле COMMERCIAL_PERSON_ADDRESS_INFO`);
+      return true;
+    };
 
+    const clickFullAddressByForId = async (forId, label) => {
+      const id = String(forId || '').trim();
+      if (!id) return false;
+      const toggled = await page.evaluate((targetFor) => {
+        const labelEl = document.querySelector(`label[for="${targetFor}"]`);
+        if (!labelEl) return false;
+        let cb = document.getElementById(targetFor);
+        if (!cb || cb.type !== 'checkbox') cb = labelEl.querySelector('input[type="checkbox"]');
+        if (!cb && labelEl.previousElementSibling && labelEl.previousElementSibling.matches('input[type="checkbox"]')) cb = labelEl.previousElementSibling;
+        if (cb && cb.type === 'checkbox' && !cb.checked) {
+          cb.click();
+          return true;
+        }
+        return false;
+      }, id).catch(() => false);
+      if (toggled) {
+        await page.waitForTimeout(120);
+        console.log(`[Taxcom] ✓ ${label}: включен режим "Полный адрес" (${id})`);
+      }
+      return toggled;
+    };
+
+    const fillCommercialRouteFieldByIndex = async (kind, index, text, label) => {
+      const v = String(text || '').trim();
+      if (!v) return false;
+      const idx = Number(index);
+      if (!Number.isInteger(idx) || idx < 0) return false;
+      const mode = kind === 'load' ? 'load' : 'unlo';
+      const checkboxFor = mode === 'load' ? `commercial_type_load_${idx}` : `commercial_type_unlo_${idx}`;
+      const inputId = mode === 'load' ? `COMMERCIAL_ADDRESS_INFO_LOAD_${idx}` : `COMMERCIAL_ADDRESS_INFO_UNLO_${idx}`;
+      await clickFullAddressByForId(checkboxFor, label).catch(() => {});
+      const loc = page.locator(`#${inputId}, input[id="${inputId}"]`).first();
+      if ((await loc.count()) === 0 || !(await loc.isVisible().catch(() => false))) return false;
+      await loc.click({ timeout: 8000 }).catch(() => {});
+      await loc.fill('');
+      await loc.type(v, { delay: 20 }).catch(async () => {
+        await loc.fill(v);
+      });
+      await page.waitForTimeout(320);
+      const picked = await pickAddressSuggestion(loc, v, `${label} (${inputId})`);
+      if (!picked) {
+        const currentValue = String((await loc.inputValue().catch(() => '')) || '').trim();
+        if (!currentValue) return false;
+        console.log(`[Taxcom] ✓ ${label}: ${inputId} заполнен без dropdown`);
+      }
+      console.log(`[Taxcom] ✓ ${label}: заполнено поле ${inputId}`);
+      return true;
+    };
+
+    const enableFullAddressForInput = async (inputLoc, label) => {
+      if (!inputLoc) return false;
+      try {
+        const toggled = await inputLoc.evaluate((el) => {
+          let cur = el;
+          for (let d = 0; d < 8 && cur; d++) {
+            const root = cur.parentElement || cur;
+            const labels = Array.from(root.querySelectorAll('label'));
+            for (const lb of labels) {
+              const txt = String(lb.textContent || '').toLowerCase();
+              if (!txt.includes('полный адрес')) continue;
+              let target = null;
+              const forId = lb.getAttribute('for');
+              if (forId) target = document.getElementById(forId);
+              if (!target) target = lb.querySelector('input[type="checkbox"]');
+              if (!target) {
+                const prev = lb.previousElementSibling;
+                if (prev && prev.matches && prev.matches('input[type="checkbox"]')) target = prev;
+              }
+              if (target && target.type === 'checkbox' && !target.checked) {
+                target.click();
+                return true;
+              }
+            }
+            cur = cur.parentElement;
+          }
+          return false;
+        }).catch(() => false);
+        if (toggled) {
+          await page.waitForTimeout(150);
+          console.log(`[Taxcom] ✓ ${label}: включен режим "Полный адрес"`);
+        }
+        return toggled;
+      } catch (_) {
+        return false;
+      }
+    };
+
+    const getLastVisibleAddrInput = async () => {
+      if (parsedLayout.routeIndices.length > 0) {
+        for (let j = parsedLayout.routeIndices.length - 1; j >= 0; j--) {
+          const idx = parsedLayout.routeIndices[j];
+          const candidate = inputs.nth(idx);
+          const visible = await candidate.isVisible().catch(() => false);
+          if (!visible) continue;
+          const disabled = await candidate.isDisabled().catch(() => false);
+          if (disabled) continue;
+          return candidate;
+        }
+      }
       const cnt = await inputs.count();
-      if (cnt === 0) break;
+      for (let i = cnt - 1; i >= 0; i--) {
+        const candidate = inputs.nth(i);
+        const visible = await candidate.isVisible().catch(() => false);
+        if (!visible) continue;
+        const disabled = await candidate.isDisabled().catch(() => false);
+        if (disabled) continue;
+        return candidate;
+      }
+      return null;
+    };
+
+    const clickAddPointBtn = async (pointInput) => {
+      if (pointInput) {
+        const clickedNear = await pointInput.evaluate((el) => {
+          let cur = el;
+          for (let i = 0; i < 7 && cur; i++) {
+            const btn = Array.from(cur.querySelectorAll('button,[role="button"],a')).find((x) => /добавить/i.test(String(x.textContent || '').trim()));
+            if (btn) {
+              btn.click();
+              return true;
+            }
+            cur = cur.parentElement;
+          }
+          return false;
+        }).catch(() => false);
+        if (clickedNear) {
+          await page.waitForTimeout(350);
+          return true;
+        }
+      }
+      const btnLocal = formScope.getByRole('button', { name: /^Добавить$/i }).first();
+      if ((await btnLocal.count()) > 0 && (await btnLocal.isVisible().catch(() => false))) {
+        await btnLocal.click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(350);
+        return true;
+      }
+      const btnPage = page.getByRole('button', { name: /^Добавить$/i }).first();
+      if ((await btnPage.count()) > 0 && (await btnPage.isVisible().catch(() => false))) {
+        await btnPage.click({ timeout: 3000 }).catch(() => {});
+        await page.waitForTimeout(350);
+        return true;
+      }
+      const clickedByJs = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button,[role="button"],a'));
+        const visible = (el) => {
+          const s = window.getComputedStyle(el);
+          const r = el.getBoundingClientRect();
+          return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+        };
+        const addBtns = buttons.filter((b) => /добавить/i.test(String(b.textContent || '').trim()) && visible(b) && !b.hasAttribute('disabled'));
+        if (addBtns.length === 0) return false;
+        addBtns[addBtns.length - 1].click();
+        return true;
+      }).catch(() => false);
+      if (clickedByJs) {
+        await page.waitForTimeout(350);
+        return true;
+      }
+      return false;
+    };
+
+    const fillPointViaRouteField = async (text, label) => {
+      if (!text) return false;
+      const pointInput = await getLastVisibleAddrInput();
+      if (!pointInput) return false;
+      await enableFullAddressForInput(pointInput, label).catch(() => {});
+      await pointInput.scrollIntoViewIfNeeded().catch(() => {});
+      await pointInput.click({ timeout: 8000 }).catch(() => {});
+      try {
+        await pointInput.fill('');
+        await pointInput.type(text, { delay: 20 }).catch(async () => {
+          await pointInput.fill(text);
+        });
+      } catch (e) {
+        console.warn(`[Taxcom] ⚠ ${label}: не удалось ввести текст в route-поле: ${e.message}`);
+        return false;
+      }
+      await page.waitForTimeout(320);
+      const picked = await pickAddressSuggestion(pointInput, text, label);
+      if (!picked) {
+        const currentValue = String((await pointInput.inputValue().catch(() => '')) || '').trim();
+        if (!currentValue) return false;
+        console.log(`[Taxcom] ✓ ${label}: введено без dropdown в route-поле`);
+      }
+      const addOk = await clickAddPointBtn(pointInput);
+      if (!addOk) {
+        console.warn(`[Taxcom] ⚠ ${label}: кнопка «Добавить» не найдена`);
+        return false;
+      }
+      console.log(`[Taxcom] ✓ ${label}: добавлено через блок «Адреса пунктов погрузки и выгрузки»`);
+      return true;
+    };
+
+    let idx = 0;
+    const routeFallbackIndices = [...parsedLayout.routeIndices];
+    const takeRouteFallbackIndex = () => {
+      if (routeFallbackIndices.length === 0) return null;
+      return routeFallbackIndices.shift();
+    };
+
+    if (origin) {
+      let ok = await fillCommercialPersonFullAddress(origin, 'Место отправления');
+      if (!ok) {
+        const originIndex = parsedLayout.originIndex >= 0 ? parsedLayout.originIndex : idx;
+        ok = await safeFillNthGlobal(originIndex, origin, 'Место отправления');
+        if (ok && originIndex === idx) idx += 1;
+      }
+      if (ok) {
+        filled.origin = true;
+      }
+    }
+
+    // Приоритет для погрузки/выгрузки: единый блок с кнопкой «Добавить».
+    if (load) {
+      let viaRouteField = await fillCommercialRouteFieldByIndex('load', 0, load, 'Погрузка');
+      if (!viaRouteField) viaRouteField = await fillPointViaRouteField(load, 'Погрузка');
+      if (viaRouteField) {
+        filled.load = true;
+      } else {
+        const fallbackIndex = takeRouteFallbackIndex();
+        const targetIndex = Number.isInteger(fallbackIndex) ? fallbackIndex : idx;
+        const ok = await safeFillNthGlobal(targetIndex, load, 'Погрузка (первая пара)');
+        if (ok) {
+          if (targetIndex === idx) idx += 1;
+          filled.load = true;
+        }
+      }
+    }
+
+    for (let seg = 0; seg < unloads.length; seg++) {
       const unloadText = unloads[seg];
-      const last = inputs.nth(cnt - 1);
-      await last.scrollIntoViewIfNeeded().catch(() => {});
-      await last.click({ timeout: 8000 }).catch(() => {});
-      await last.fill('');
-      await last.fill(unloadText);
-      await page.waitForTimeout(220);
-      console.log(`[Taxcom] ✓ Выгрузка сегмент ${seg + 1}: ${unloadText.slice(0, 80)}${unloadText.length > 80 ? '…' : ''}`);
+      if (seg > 0) {
+        await clickAddPointBtn().catch(() => {});
+      }
+      let viaRouteField = await fillCommercialRouteFieldByIndex('unlo', seg, unloadText, `Выгрузка сегмент ${seg + 1}`);
+      if (!viaRouteField) viaRouteField = await fillPointViaRouteField(unloadText, `Выгрузка сегмент ${seg + 1}`);
+      if (viaRouteField) {
+        filled.unloadCount += 1;
+        continue;
+      }
+      const fallbackIndex = takeRouteFallbackIndex();
+      const targetIndex = Number.isInteger(fallbackIndex) ? fallbackIndex : (idx + seg);
+      const ok = await safeFillNthGlobal(targetIndex, unloadText, `Выгрузка (fallback ${seg + 1})`);
+      if (ok) filled.unloadCount += 1;
     }
   } catch (err) {
     console.warn('[Taxcom] fillFreightAddressesOnTaxcomWaybillForm:', err.message);
+    return { skipped: false, expected, filled, error: err.message };
   }
+  return { skipped: false, expected, filled };
 }
 
 async function applyFreightWaybillTaxcomFields(page, env) {
@@ -315,9 +930,9 @@ async function ensureCarParkSelectedOnT1(page, desiredTakskornId, desiredParkNam
   const targetId = desiredTakskornId != null ? String(desiredTakskornId).trim() : '';
   if (!targetId) return false;
 
-  // 1) Если форма уже на месте (поле "номер путевого" видно) — считаем, что профиль выбран.
+  // 1) Даже если форма уже открыта, НЕ считаем профиль корректным автоматически:
+  // иногда Такском оставляет прошлый автопарк (например, "Бенефис"), поэтому всё равно пробуем явный выбор.
   const hasWaybillInput = page.locator('input[placeholder*="номер путевого"], input[name="WAYBILL_NUMBER"], #waybill_number').first();
-  if ((await hasWaybillInput.count()) > 0 && await hasWaybillInput.isVisible().catch(() => false)) return true;
 
   // 2) Попытка: модалка/блок выбора профиля (есть searchValueProfile)
   const search = page.locator('#searchValueProfile, input[id="searchValueProfile"]').first();
@@ -326,19 +941,28 @@ async function ensureCarParkSelectedOnT1(page, desiredTakskornId, desiredParkNam
     await search.fill(targetId);
     await page.waitForTimeout(400);
 
-    const pickCandidate = async (q) => {
+    const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const pickCandidate = async (q, strict = false) => {
       if (!q) return false;
-      // Ищем строку/кнопку/элемент с совпадением по ID или названию
+      const query = String(q).trim();
+      if (!query) return false;
+      // Ищем только "элементы выбора", избегая широкого div:has-text (он может выбрать левый парк).
       const candidates = [
-        page.locator(`text="${q}"`).first(),
-        page.locator(`text=${q}`).first(),
-        page.locator(`tr:has-text("${q}")`).first(),
-        page.locator(`li:has-text("${q}")`).first(),
-        page.locator(`div:has-text("${q}")`).first(),
-        page.locator(`button:has-text("${q}")`).first(),
+        page.locator(`tr:has-text("${query}") button:has-text("Выбрать"), tr:has-text("${query}") a:has-text("Выбрать")`).first(),
+        page.locator(`li:has-text("${query}") button:has-text("Выбрать"), li:has-text("${query}") a:has-text("Выбрать")`).first(),
+        page.locator(`a:has-text("${query}")`).first(),
+        page.locator(`button:has-text("${query}")`).first(),
+        page.locator(`tr:has-text("${query}")`).first(),
+        page.locator(`li:has-text("${query}")`).first(),
       ];
       for (const c of candidates) {
         if ((await c.count()) > 0 && await c.isVisible().catch(() => false)) {
+          if (strict) {
+            const t = String((await c.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+            const re = new RegExp(`(^|\\D)${escRe(query)}(\\D|$)`);
+            if (!re.test(t)) continue;
+          }
           await c.scrollIntoViewIfNeeded().catch(() => {});
           await c.click().catch(() => {});
           await page.waitForTimeout(1200);
@@ -348,12 +972,12 @@ async function ensureCarParkSelectedOnT1(page, desiredTakskornId, desiredParkNam
       return false;
     };
 
-    let picked = await pickCandidate(targetId);
+    let picked = await pickCandidate(targetId, true);
     if (!picked && desiredParkName) {
       await search.fill('');
       await search.fill(String(desiredParkName));
       await page.waitForTimeout(400);
-      picked = await pickCandidate(String(desiredParkName));
+      picked = await pickCandidate(String(desiredParkName), true);
     }
 
     // после выбора профиль обычно уводит на /waybill/new (форма) — ждём появления полей
@@ -591,6 +1215,8 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
   const staff = item.staff || {};
   const waybillNumber = item.waybillNumber || '';
   const startOdometer = item.startOdometer ?? 0;
+  const preflight = buildEplPreflight(item, env);
+  logEplPreflight(preflight);
   const createdAt = parseUtcDate(item.createdAt);
   if (createdAt) createdAt.setSeconds(0, 0);
   const dateFrom = getMoscowDateString(createdAt);
@@ -777,13 +1403,13 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         console.log('[Taxcom] Подсказка: закрой этот браузер (Chromium/Яндекс), если он открыт — иначе профиль занят.');
       }
       // Без ignoreDefaultArgs Playwright передаёт --disable-extensions → расширения (КриптоПро) не грузятся, браузер может падать
-      persistentContext = await chromium.launchPersistentContext(userDataDir, {
+      persistentContext = await launchPersistentContextWithRecovery(chromium, userDataDir, {
         locale: 'ru-RU',
         headless: false,
         channel: browserPath ? undefined : 'chrome',
         executablePath: browserPath || undefined,
-        ignoreDefaultArgs: ['--disable-extensions']
-      });
+        ignoreDefaultArgs: EXTENSION_SAFE_IGNORE_DEFAULT_ARGS
+      }, startFromT3 ? 'mechanic' : 'dispatcher');
       context = persistentContext;
       page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     } else {
@@ -1225,10 +1851,23 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
     } catch (fe) {
       console.warn('[Taxcom] applyFreightWaybillTaxcomFields:', fe.message);
     }
+    let freightFillResult = null;
     try {
-      await fillFreightAddressesOnTaxcomWaybillForm(page, item, env);
+      freightFillResult = await fillFreightAddressesOnTaxcomWaybillForm(page, item, env);
     } catch (addrErr) {
       console.warn('[Taxcom] fillFreightAddressesOnTaxcomWaybillForm:', addrErr.message);
+    }
+    const requireFreight = !/^(0|false|no)$/i.test(String((env && env.TAXCOM_REQUIRE_FREIGHT_AUTOFILL) || process.env.TAXCOM_REQUIRE_FREIGHT_AUTOFILL || '1').trim());
+    if (requireFreight && freightFillResult && !freightFillResult.skipped && freightFillResult.expected) {
+      const exp = freightFillResult.expected;
+      const got = freightFillResult.filled || { origin: false, load: false, unloadCount: 0 };
+      const issues = [];
+      if (exp.origin && !got.origin) issues.push('место отправления');
+      if (exp.load && !got.load) issues.push('адрес погрузки');
+      if (exp.unloadCount > got.unloadCount) issues.push(`точки выгрузки (${got.unloadCount}/${exp.unloadCount})`);
+      if (issues.length > 0) {
+        throw new Error(`Не удалось корректно заполнить freight-поля в ЛК Такском: ${issues.join(', ')}`);
+      }
     }
 
     if (env.DEBUG_STEP_BY_STEP === '1' || env.DEBUG_STEP_BY_STEP === 'true') {
@@ -1635,27 +2274,35 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
     // Реквизиты организации берутся ТОЛЬКО из карточки авто (owner), без фолбэка на парк.
     const ow = driver.owner || null;
     if (!ow) {
-      console.warn('[Taxcom] [ШАГ 4] ⚠ У авто не указан владелец (owner). Блок «Лицо, оформившее путевой лист» будет пропущен. Укажите владельца в карточке авто.');
+      console.warn('[Taxcom] [ШАГ 4] ⚠ У авто не указан владелец (owner). Пробую fallback из реквизитов парка; лучше привязать владельца к карточке авто.');
     }
-    const issInn        = (ow?.inn || '').trim();
-    const issOgrn       = (ow ? (ow.type === 'individual' ? (ow.ogrnip || '') : (ow.ogrn || '')) : '').trim();
-    const issName       = (ow?.name || '').trim();
-    const issKpp        = (ow?.kpp || '').trim();
-    const issPhone      = (ow?.phone || '').trim();
-    const issEmail      = (ow?.email || '').trim();
-    const issIndex      = (ow?.postalIndex || '').trim();
-    const issRegion     = (ow?.regionCode || '').trim();
-    const issCity       = (ow?.city || '').trim();
-    const issStreet     = (ow?.street || '').trim();
-    const issHouse      = (ow?.house || '').trim();
-    const issDistrict   = (ow?.district || '').trim();
-    const issLocality   = (ow?.locality || '').trim();
-    const issHousing    = (ow?.housing || '').trim();
-    const issFlat       = (ow?.flat || '').trim();
-    const isIndividual  = ow ? ow.type === 'individual' : false;
+    const issInn        = (ow?.inn || driver.parkInn || '').trim();
+    const rawOgrn       = (ow?.ogrn || driver.parkOgrn || '').trim();
+    const rawOgrnip     = (ow?.ogrnip || '').trim();
+    const fallbackOwnerName = String(driver.ownerName || parkName || '').trim();
+    const issName       = (ow?.name || fallbackOwnerName).trim();
+    const issKpp        = (ow?.kpp || driver.parkKpp || '').trim();
+    const issPhone      = (ow?.phone || driver.parkPhone || '').trim();
+    const issEmail      = (ow?.email || driver.parkEmail || '').trim();
+    const issIndex      = (ow?.postalIndex || driver.parkPostalIndex || '').trim();
+    const issRegion     = (ow?.regionCode || driver.parkRegionCode || '').trim();
+    const issCity       = (ow?.city || driver.parkCity || '').trim();
+    const issStreet     = (ow?.street || driver.parkStreet || '').trim();
+    const issHouse      = (ow?.house || driver.parkHouse || '').trim();
+    const issDistrict   = (ow?.district || driver.parkDistrict || '').trim();
+    const issLocality   = (ow?.locality || driver.parkLocality || '').trim();
+    const issHousing    = (ow?.housing || driver.parkHousing || '').trim();
+    const issFlat       = (ow?.flat || driver.parkFlat || '').trim();
+    const ownerTypeRaw  = String(ow?.type || '').trim().toLowerCase();
+    const byType        = ownerTypeRaw === 'individual' || ownerTypeRaw === 'ip';
+    const byInn         = issInn.length === 12;
+    const byOgrnip      = rawOgrnip.length === 15 || rawOgrn.length === 15;
+    const byName        = /^ип[\s".]/i.test(issName);
+    const isIndividual  = !!ow && (byType || byInn || byOgrnip || byName);
+    const issOgrn       = (isIndividual ? (rawOgrnip || rawOgrn) : (rawOgrn || rawOgrnip)).trim();
     const issRole       = ow?.role || 'С'; // С — собственник, А — арендодатель
 
-    console.log('[Taxcom] [ШАГ 4] Заполняю лицо, оформившее путевой лист', ow ? `(владелец id=${ow.id}: ${issName})` : '(владелец не указан)');
+    console.log('[Taxcom] [ШАГ 4] Заполняю лицо, оформившее путевой лист', ow ? `(владелец id=${ow.id}: ${issName}, тип=${isIndividual ? 'ИП' : 'ЮЛ'})` : '(владелец не указан)');
 
     let accordionButton = page.locator('#accordionButton').first();
     if ((await accordionButton.count()) === 0) {
@@ -1676,12 +2323,37 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
       }
 
       // Тип лица: ЮЛ / ИП
-      const legalTypeSelect = page.locator('#issue_person_legal_type').first();
-      if ((await legalTypeSelect.count()) > 0) {
-        await legalTypeSelect.selectOption({ value: isIndividual ? 'individual' : 'legal' });
+      const legalTypeSelect = page.locator('#issue_person_legal_type, select[name="ISSUE_PERSON_LEGAL_TYPE"], select[name="issue_person_legal_type"]').first();
+      let legalTypeSwitched = false;
+      if ((await legalTypeSelect.count()) > 0 && await legalTypeSelect.isVisible().catch(() => false)) {
+        const tryValues = isIndividual
+          ? ['individual', 'ip', 'ИП', '2']
+          : ['legal', 'ul', 'ЮЛ', '1'];
+        for (const val of tryValues) {
+          const ok = await legalTypeSelect.selectOption({ value: val }).then(() => true).catch(() => false);
+          if (ok) {
+            legalTypeSwitched = true;
+            break;
+          }
+        }
+        if (!legalTypeSwitched) {
+          legalTypeSwitched = await legalTypeSelect.selectOption({ label: isIndividual ? /индивиду|ип/i : /юрид|юрлиц|организац/i }).then(() => true).catch(() => false);
+        }
+      }
+      if (!legalTypeSwitched) {
+        const legalToggle = page.locator('label, button, [role="tab"], .btn, .switch, .toggle').filter({ hasText: isIndividual ? /индивиду|ип/i : /юрид|юрлиц|организац/i }).first();
+        if ((await legalToggle.count()) > 0 && await legalToggle.isVisible().catch(() => false)) {
+          await legalToggle.click({ timeout: 3000 }).catch(() => {});
+          legalTypeSwitched = true;
+        }
+      }
+      if (legalTypeSwitched) {
+        console.log(`[Taxcom] ✓ Лицо оформившее: тип лица = ${isIndividual ? 'ИП' : 'ЮЛ'}`);
         await page.waitForTimeout(500);
         await page.evaluate(() => { if (window.waybill && window.waybill.runPerson) window.waybill.runPerson(); }).catch(() => {});
         await page.waitForTimeout(300);
+      } else {
+        console.warn(`[Taxcom] ⚠ Лицо оформившее: не удалось явно переключить тип лица на ${isIndividual ? 'ИП' : 'ЮЛ'}`);
       }
 
       // Роль: Собственник (С) / Арендодатель (А)
@@ -1695,6 +2367,68 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         console.log('[Taxcom] ✓ Лицо оформившее: роль =', roleValue);
       }
 
+      const fillIssuePersonName = async (nameValue, labelTag) => {
+        const v = String(nameValue || '').trim();
+        if (!v) return false;
+        const nameSelectors = isIndividual
+          ? '#issue_person_name, #issue_person_ip_name, #ISSUE_PERSON_NAME, input[name="ISSUE_PERSON_NAME"], input[name="issue_person_name"], textarea[name="ISSUE_PERSON_NAME"]'
+          : '#issue_person_name, #ISSUE_PERSON_NAME, input[name="ISSUE_PERSON_NAME"], input[name="issue_person_name"], textarea[name="ISSUE_PERSON_NAME"]';
+        const nameEl = page.locator(nameSelectors).first();
+        if ((await nameEl.count()) === 0 || !(await nameEl.isVisible().catch(() => false))) return false;
+        await nameEl.fill(v).catch(() => {});
+        await page.waitForTimeout(120);
+        const finalVal = String((await nameEl.inputValue().catch(() => '')) || '').trim();
+        if (!finalVal) return false;
+        console.log(`[Taxcom] ✓ Лицо оформившее (${labelTag}): наименование/ФИО =`, finalVal);
+        return true;
+      };
+
+      const fillIssuePersonField = async (selectors, value, label) => {
+        const v = String(value || '').trim();
+        if (!v) return false;
+        const field = page.locator(selectors).first();
+        if ((await field.count()) === 0 || !(await field.isVisible().catch(() => false))) return false;
+        await field.click({ timeout: 1500 }).catch(() => {});
+        await field.fill('').catch(() => {});
+        await field.type(v, { delay: 20 }).catch(async () => {
+          await field.fill(v).catch(() => {});
+        });
+        await field.evaluate((el) => {
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }).catch(() => {});
+        await page.waitForTimeout(120);
+        const finalVal = String((await field.inputValue().catch(() => '')) || '').trim();
+        if (!finalVal) return false;
+        console.log(`[Taxcom] ✓ Лицо оформившее: ${label} =`, finalVal);
+        return true;
+      };
+
+      const fullAddressLine = [issIndex, issRegion, issDistrict, issCity, issLocality, issStreet, issHouse, issHousing, issFlat]
+        .map((x) => String(x || '').trim())
+        .filter(Boolean)
+        .join(', ');
+      let fullAddressModeUsed = false;
+      if (fullAddressLine) {
+        const fullAddressToggle = page.locator('label, button, [role="switch"], [role="button"]').filter({ hasText: /полный\s+адрес/i }).first();
+        const fullAddressCheckbox = page.locator('input[type="checkbox"][id*="full"], input[type="checkbox"][name*="FULL"], #issue_person_full_address_mode').first();
+        if ((await fullAddressToggle.count()) > 0 && await fullAddressToggle.isVisible().catch(() => false)) {
+          await fullAddressToggle.click({ timeout: 2500 }).catch(() => {});
+          fullAddressModeUsed = true;
+        } else if ((await fullAddressCheckbox.count()) > 0 && await fullAddressCheckbox.isVisible().catch(() => false)) {
+          const checked = await fullAddressCheckbox.isChecked().catch(() => false);
+          if (!checked) await fullAddressCheckbox.check({ force: true }).catch(() => {});
+          fullAddressModeUsed = true;
+        }
+        const fullAddressInput = page.locator('#COMMERCIAL_PERSON_ADDRESS_INFO, input[name="COMMERCIAL_PERSON_ADDRESS_INFO"], #ISSUE_PERSON_FULL_ADDRESS, #issue_person_full_address, input[name="ISSUE_PERSON_FULL_ADDRESS"], textarea[name="ISSUE_PERSON_FULL_ADDRESS"], input[id*="FULL_ADDRESS"], textarea[id*="FULL_ADDRESS"]').first();
+        if ((await fullAddressInput.count()) > 0 && await fullAddressInput.isVisible().catch(() => false)) {
+          await fullAddressInput.fill(fullAddressLine).catch(() => {});
+          console.log('[Taxcom] ✓ Лицо оформившее: полный адрес (одной строкой) =', fullAddressLine);
+          fullAddressModeUsed = true;
+        }
+      }
+
       if (isIndividual) {
         if (issInn) {
           const innEl = page.locator('#issue_person_innip').first();
@@ -1703,14 +2437,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
             console.log('[Taxcom] ✓ Лицо оформившее (ИП): ИНН =', issInn);
           }
         }
-        if (issName) {
-          // ИП: ФИО может заполняться в общее поле name или в разбивку
-          const nameEl = page.locator('#issue_person_name, #issue_person_ip_name').first();
-          if ((await nameEl.count()) > 0 && await nameEl.isVisible().catch(() => false)) {
-            await nameEl.fill(issName);
-            console.log('[Taxcom] ✓ Лицо оформившее (ИП): ФИО =', issName);
-          }
-        }
+        if (issName) await fillIssuePersonName(issName, 'ИП');
         if (issOgrn && issOgrn.length >= 15) {
           const ogrnEl = page.locator('#issue_person_ogrnip').first();
           if ((await ogrnEl.count()) > 0 && await ogrnEl.isVisible().catch(() => false)) {
@@ -1719,32 +2446,17 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
           }
         }
       } else {
-        if (issName) {
-          const nameEl = page.locator('#issue_person_name').first();
-          if ((await nameEl.count()) > 0 && await nameEl.isVisible().catch(() => false)) {
-            await nameEl.fill(issName);
-            console.log('[Taxcom] ✓ Лицо оформившее (ЮЛ): наименование =', issName);
-          }
-        }
+        if (issName) await fillIssuePersonName(issName, 'ЮЛ');
         if (issInn && issInn.length === 10) {
-          const innEl = page.locator('#issue_person_inn').first();
-          if ((await innEl.count()) > 0 && await innEl.isVisible().catch(() => false)) {
-            await innEl.fill(issInn);
-            console.log('[Taxcom] ✓ Лицо оформившее (ЮЛ): ИНН =', issInn);
-          }
+          await fillIssuePersonField('#issue_person_inn, #ISSUE_PERSON_INN, input[name="ISSUE_PERSON_INN"], input[name="issue_person_inn"]', issInn, 'ИНН (ЮЛ)');
         }
         if (issOgrn && issOgrn.length >= 13) {
-          const ogrnEl = page.locator('#issue_person_ogrn').first();
-          if ((await ogrnEl.count()) > 0 && await ogrnEl.isVisible().catch(() => false)) {
-            await ogrnEl.fill(issOgrn);
-            console.log('[Taxcom] ✓ Лицо оформившее (ЮЛ): ОГРН =', issOgrn);
-          }
+          await fillIssuePersonField('#issue_person_ogrn, #ISSUE_PERSON_OGRN, input[name="ISSUE_PERSON_OGRN"], input[name="issue_person_ogrn"]', issOgrn, 'ОГРН (ЮЛ)');
         }
         if (issKpp) {
-          const kppEl = page.locator('#issue_person_kpp').first();
-          if ((await kppEl.count()) > 0 && await kppEl.isVisible().catch(() => false)) {
-            await kppEl.fill(issKpp);
-            console.log('[Taxcom] ✓ Лицо оформившее (ЮЛ): КПП =', issKpp);
+          const kppOk = await fillIssuePersonField('#issue_person_kpp, #ISSUE_PERSON_KPP, input[name="ISSUE_PERSON_KPP"], input[name="issue_person_kpp"]', issKpp, 'КПП (ЮЛ)');
+          if (!kppOk) {
+            console.warn('[Taxcom] ⚠ Лицо оформившее: поле КПП не найдено/не заполнено, проверь верстку блока ISSUE_PERSON');
           }
         }
       }
@@ -1765,7 +2477,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Индекс
-      if (issIndex) {
+      if (!fullAddressModeUsed && issIndex) {
         const idxEl = page.locator('#ISSUE_PERSON_INDEX').first();
         if ((await idxEl.count()) > 0 && await idxEl.isVisible().catch(() => false)) {
           await idxEl.fill(issIndex);
@@ -1773,7 +2485,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Регион
-      if (issRegion) {
+      if (!fullAddressModeUsed && issRegion) {
         const regionEl = page.locator('#ISSUE_PERSON_REGION').first();
         if ((await regionEl.count()) > 0 && await regionEl.isVisible().catch(() => false)) {
           await regionEl.selectOption({ value: issRegion });
@@ -1781,7 +2493,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Район
-      if (issDistrict) {
+      if (!fullAddressModeUsed && issDistrict) {
         const districtEl = page.locator('#ISSUE_PERSON_DISTRICT, input[name="ISSUE_PERSON_DISTRICT"], #Район').first();
         if ((await districtEl.count()) > 0 && await districtEl.isVisible().catch(() => false)) {
           await districtEl.fill(issDistrict);
@@ -1789,7 +2501,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Город
-      if (issCity) {
+      if (!fullAddressModeUsed && issCity) {
         const cityEl = page.locator('#ISSUE_PERSON_CITY').first();
         if ((await cityEl.count()) > 0 && await cityEl.isVisible().catch(() => false)) {
           try {
@@ -1822,7 +2534,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Населённый пункт
-      if (issLocality) {
+      if (!fullAddressModeUsed && issLocality) {
         const localityEl = page.locator('#ISSUE_PERSON_LOCALITY, input[name="ISSUE_PERSON_LOCALITY"], #Населённый_пункт').first();
         if ((await localityEl.count()) > 0 && await localityEl.isVisible().catch(() => false)) {
           try {
@@ -1860,7 +2572,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Улица
-      if (issStreet) {
+      if (!fullAddressModeUsed && issStreet) {
         const streetEl = page.locator('#ISSUE_PERSON_STREET').first();
         if ((await streetEl.count()) > 0 && await streetEl.isVisible().catch(() => false)) {
           await streetEl.fill(issStreet);
@@ -1868,7 +2580,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Дом
-      if (issHouse) {
+      if (!fullAddressModeUsed && issHouse) {
         const houseEl = page.locator('#ISSUE_PERSON_HOUSE').first();
         if ((await houseEl.count()) > 0 && await houseEl.isVisible().catch(() => false)) {
           await houseEl.fill(issHouse);
@@ -1876,7 +2588,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Корпус
-      if (issHousing) {
+      if (!fullAddressModeUsed && issHousing) {
         const housingEl = page.locator('#ISSUE_PERSON_HOUSING, input[name="ISSUE_PERSON_HOUSING"], #Корпус').first();
         if ((await housingEl.count()) > 0 && await housingEl.isVisible().catch(() => false)) {
           await housingEl.fill(issHousing);
@@ -1884,7 +2596,7 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         }
       }
       // Квартира
-      if (issFlat) {
+      if (!fullAddressModeUsed && issFlat) {
         const flatEl = page.locator('#ISSUE_PERSON_FLAT, input[name="ISSUE_PERSON_FLAT"], #Квартира').first();
         if ((await flatEl.count()) > 0 && await flatEl.isVisible().catch(() => false)) {
           await flatEl.fill(issFlat);
@@ -3225,17 +3937,17 @@ async function completeEplInTaxcom(item, env, existingPage, existingContext) {
       headless: false,
       channel: browserPath ? undefined : 'chrome',
       executablePath: browserPath || undefined,
-      ignoreDefaultArgs: ['--disable-extensions']
+      ignoreDefaultArgs: EXTENSION_SAFE_IGNORE_DEFAULT_ARGS
     };
     if (userDataDir) {
       console.log('[Taxcom] Запускаю браузер для Т5/Т6 (КриптоПро)...');
       try {
-        persistentContext = await chromium.launchPersistentContext(userDataDir, persistentContextOptions);
+        persistentContext = await launchPersistentContextWithRecovery(chromium, userDataDir, persistentContextOptions, 't5t6');
       } catch (launchErr) {
         if (launchErr.message && launchErr.message.includes('closed')) {
           console.warn('[Taxcom] Профиль занят (закрой Chromium после создания ЭПЛ). Через 25 сек повторю запуск для Т5/Т6.');
           await new Promise(r => setTimeout(r, 25000));
-          persistentContext = await chromium.launchPersistentContext(userDataDir, persistentContextOptions);
+          persistentContext = await launchPersistentContextWithRecovery(chromium, userDataDir, persistentContextOptions, 't5t6');
         } else {
           throw launchErr;
         }
@@ -3760,15 +4472,31 @@ async function openBrowserAndLoginForRole(env, role) {
     return null;
   }
   try {
-    const persistentContext = await chromium.launchPersistentContext(userDataDir, {
-      locale: 'ru-RU',
-      headless: false,
-      channel: browserPath ? undefined : 'chrome',
-      executablePath: browserPath || undefined,
-      ignoreDefaultArgs: ['--disable-extensions']
-    });
-    await persistentContext.clearCookies();
-    const page = persistentContext.pages().length > 0 ? persistentContext.pages()[0] : await persistentContext.newPage();
+    cleanupProfileTransientFiles(userDataDir, role);
+    let browserFallback = null;
+    let context = null;
+    try {
+      context = await launchPersistentContextWithRecovery(chromium, userDataDir, {
+        locale: 'ru-RU',
+        headless: false,
+        channel: browserPath ? undefined : 'chrome',
+        executablePath: browserPath || undefined,
+        ignoreDefaultArgs: EXTENSION_SAFE_IGNORE_DEFAULT_ARGS
+      }, role);
+    } catch (launchErr) {
+      const allowFallback = !/^(0|false|no)$/i.test(String(env.TAXCOM_ALLOW_EPHEMERAL_PROFILE_FALLBACK || '0').trim());
+      if (!allowFallback) throw launchErr;
+      console.warn(`[Taxcom] [${role}] Профиль не стартует — использую временный контекст без профиля`);
+      const launchOptions = {
+        headless: false,
+        channel: browserPath ? undefined : 'chrome',
+        executablePath: browserPath || undefined,
+      };
+      browserFallback = await chromium.launch(launchOptions);
+      context = await browserFallback.newContext({ locale: 'ru-RU' });
+    }
+    await context.clearCookies();
+    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     try {
       await page.evaluate(() => {
         try { localStorage.clear(); } catch (_) {}
@@ -3779,10 +4507,11 @@ async function openBrowserAndLoginForRole(env, role) {
     }
     page.setDefaultTimeout(60000);
     if (!(await login(page, baseUrl, phone, pass, env))) {
-      await persistentContext.close().catch(() => {});
+      await context.close().catch(() => {});
+      if (browserFallback) await browserFallback.close().catch(() => {});
       return null;
     }
-    return { context: persistentContext, page };
+    return { context, page };
   } catch (e) {
     console.warn(`[Taxcom] [${role}] openBrowserAndLoginForRole:`, e.message);
     return null;
@@ -3872,13 +4601,14 @@ async function fillAndSignT2Only(item, env, reuse, reportTitulProgress) {
   try {
     if (!useReuse) {
       if (userDataDir) {
-        persistentContext = await chromium.launchPersistentContext(userDataDir, {
+        cleanupProfileTransientFiles(userDataDir, 'medic');
+        persistentContext = await launchPersistentContextWithRecovery(chromium, userDataDir, {
           locale: 'ru-RU',
           headless: false,
           channel: browserPath ? undefined : 'chrome',
           executablePath: browserPath || undefined,
-          ignoreDefaultArgs: ['--disable-extensions']
-        });
+          ignoreDefaultArgs: EXTENSION_SAFE_IGNORE_DEFAULT_ARGS
+        }, 'medic');
         context = persistentContext;
         page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
       } else {

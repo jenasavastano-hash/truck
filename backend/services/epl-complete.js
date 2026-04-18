@@ -51,13 +51,15 @@ async function completeEplById(db, eplId, endOdometer) {
   const staffList = await new Promise((resolve) => {
     db.all(
       `SELECT role, fullName, licenseSerial, licenseNumber, licenseDateStart, licenseDateEnd
-       FROM park_staff WHERE parkId = ? AND role IN ('medic', 'technic')`,
+       FROM park_staff
+       WHERE parkId = ? AND role IN ('medic', 'technic') AND COALESCE(isActive,1) = 1
+       ORDER BY COALESCE(priority,0) DESC, id DESC`,
       [epl.parkId],
       (staffErr, rows) => resolve(rows || [])
     );
   });
   staffList.forEach(s => {
-    if (s.role === 'medic') {
+    if (s.role === 'medic' && !medicLicense) {
       if ((s.fullName || '').trim()) medicName = normalizeFio(s.fullName);
       if ((s.licenseSerial || '').trim() || (s.licenseNumber || '').trim()) {
         medicLicense = {
@@ -68,7 +70,9 @@ async function completeEplById(db, eplId, endOdometer) {
         };
       }
     }
-    if (s.role === 'technic' && (s.fullName || '').trim()) authorizedName = normalizeFio(s.fullName);
+    if (s.role === 'technic' && authorizedName === (epl.driverName || 'Механик') && (s.fullName || '').trim()) {
+      authorizedName = normalizeFio(s.fullName);
+    }
   });
 
   const eplIdForApi = epl.eplGuid || epl.mintransId;

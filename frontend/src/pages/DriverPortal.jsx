@@ -6,6 +6,7 @@ import StatusOverview from '../components/driver/StatusOverview';
 import BalanceMenu from '../components/driver/BalanceMenu';
 import ProfileMenu from '../components/driver/ProfileMenu';
 import DriverProfileModal from '../components/driver/DriverProfileModal';
+import { useToast } from '../hooks/useToast';
 import { FileText, Bell, Gamepad2, Clock, FileCheck, AlertCircle, Truck, ShieldAlert, MessageCircle, Sun, Moon } from 'lucide-react';
 import FreightCinematicBackdrop from '../components/FreightCinematicBackdrop';
 import DriverCreateEplFreightFields from '../components/driver/DriverCreateEplFreightFields';
@@ -24,6 +25,7 @@ function readDriverSceneNight() {
 
 export default function DriverPortal() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [driver, setDriver] = useState(null);
   /** В парке включён ввод адресов водителем при создании ЭПЛ */
   const freightDriverEntry = driver?.freightAddressEntryMode === 'driver';
@@ -63,6 +65,10 @@ export default function DriverPortal() {
   const [commissionerOnlineCount, setCommissionerOnlineCount] = useState(0);
   const [commissionerRequestPrice, setCommissionerRequestPrice] = useState(0);
   const [sceneNight, setSceneNight] = useState(readDriverSceneNight);
+  const [requestingShiftOpen, setRequestingShiftOpen] = useState(false);
+  const [shiftRequestSentAt, setShiftRequestSentAt] = useState(null);
+
+  const getShiftRequestStorageKey = (driverUserId) => `driver_shift_open_request_${driverUserId}`;
 
   useEffect(() => {
     try {
@@ -208,12 +214,20 @@ export default function DriverPortal() {
   const loadDriverData = async (skipFullScreenLoader = false) => {
     try {
       if (!skipFullScreenLoader) setLoading(true);
-      const [profileRes, balanceRes] = await Promise.all([
+      const [profileRes, balanceRes, shiftRequestRes] = await Promise.all([
         api.get('/driver/profile'),
-        api.get('/driver/balance')
+        api.get('/driver/balance'),
+        api.get('/driver/shift-open-request/status').catch(() => ({ data: null })),
       ]);
       setDriver(profileRes.data);
       setBalance(balanceRes.data?.balance ?? 0);
+      const req = shiftRequestRes?.data?.request;
+      if (req?.status === 'pending' && req.createdAt) {
+        const iso = new Date(req.createdAt).toISOString();
+        setShiftRequestSentAt(iso);
+      } else if (req?.status && req.status !== 'pending') {
+        setShiftRequestSentAt(null);
+      }
     } catch (err) {
       console.error('Driver data loading error:', err);
       if (err.response?.status === 401) {
@@ -264,6 +278,12 @@ export default function DriverPortal() {
         return true;
       });
       setPendingEpl(creating || null);
+      if (active || creating) {
+        setShiftRequestSentAt(null);
+        try {
+          if (driver?.id) localStorage.removeItem(getShiftRequestStorageKey(driver.id));
+        } catch (_) {}
+      }
     } catch (err) {
       console.error('EPL list loading error:', err);
       setEplList([]);
@@ -271,6 +291,19 @@ export default function DriverPortal() {
       setLoadingEplList(false);
     }
   };
+
+  useEffect(() => {
+    if (!driver?.id) return;
+    try {
+      const raw = localStorage.getItem(getShiftRequestStorageKey(driver.id));
+      if (!raw) return;
+      const ts = Date.parse(raw);
+      if (!Number.isNaN(ts)) {
+        setShiftRequestSentAt(new Date(ts).toISOString());
+      }
+    } catch (_) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driver?.id]);
 
   const loadNotifications = async () => {
     try {
@@ -334,6 +367,10 @@ export default function DriverPortal() {
   };
 
   const openCreateEplModal = () => {
+    if (driver?.canCreateEpl === false) {
+      showToast('Создание ЭПЛ в кабинете водителя отключено. Нажмите "Запросить открытие смены".', 'error');
+      return;
+    }
     // Проверяем верификацию водителя
     if (!driver?.isVerified) {
       alert('Водитель не верифицирован. Обратитесь к менеджеру для верификации.');
@@ -465,6 +502,55 @@ export default function DriverPortal() {
     }
   };
 
+  const handleRequestShiftOpen = async () => {
+    if (requestingShiftOpen) return;
+    const confirmText = shiftRequestSentAt
+      ? 'Заявка уже отправлялась. Отправить повторно?'
+      : 'Отправить заявку менеджеру/директору на открытие смены?';
+    if (!window.confirm(confirmText)) return;
+    const odometerInput = window.prompt('Укажите текущий одометр (км):', createEplOdometer || '0');
+    if (odometerInput == null) return;
+    const startOdometer = Number(odometerInput);
+    if (!Number.isFinite(startOdometer) || startOdometer < 0) {
+      showToast('Введите корректный одометр (число больше или равно 0).', 'error');
+      return;
+    }
+    try {
+      setRequestingShiftOpen(true);
+      const { data } = await api.post('/driver/shift-open-request', {
+        message: 'Прошу открыть смену и оформить путевой лист.',
+        startOdometer,
+      });
+      if (data?.autoOpened) {
+        setShiftRequestSentAt(null);
+        showToast('Плановая смена найдена: путевой уже отправлен в оформление.', 'success');
+        await loadDriverData(true);
+        await loadEplList();
+        await loadNotifications();
+        return;
+      }
+      const sentAt = new Date().toISOString();
+      setShiftRequestSentAt(sentAt);
+      try {
+        if (driver?.id) localStorage.setItem(getShiftRequestStorageKey(driver.id), sentAt);
+      } catch (_) {}
+      showToast('Ваша заявка отправлена. Ожидайте — смена формируется.', 'success');
+      await loadNotifications();
+    } catch (err) {
+      if (err.response?.status === 409) {
+        const activeCreatedAt = err.response?.data?.activeRequest?.createdAt;
+        if (activeCreatedAt) {
+          setShiftRequestSentAt(new Date(activeCreatedAt).toISOString());
+        }
+        showToast('У вас уже есть активная заявка. Ожидайте ответа менеджера/директора.', 'info');
+        return;
+      }
+      showToast(err.response?.data?.error || 'Не удалось отправить заявку на открытие смены', 'error');
+    } finally {
+      setRequestingShiftOpen(false);
+    }
+  };
+
   const closeCreateEplModal = () => {
     setShowCreateEplModal(false);
     setCreateEplStep('form');
@@ -505,7 +591,7 @@ export default function DriverPortal() {
       const hoursLeft = (validUntil.getTime() - now) / (1000 * 60 * 60);
       return {
         status: 'active',
-        value: 'Путевой лист открыт, смена активна',
+        value: 'PDF Минтранс получены, смена активна',
         time: hoursLeft > 0 ? `До конца смены: ${Math.floor(hoursLeft)}ч ${Math.floor((hoursLeft % 1) * 60)}м` : 'Смена скоро завершится',
         shiftOpenedAt: formatDateMsk(shiftStart)
       };
@@ -514,14 +600,29 @@ export default function DriverPortal() {
       const isTaxcomOnly = pendingEpl.parkEplPrintMode === 'taxcom_only';
       return {
         status: 'creating',
-        value: isTaxcomOnly ? 'Оформляется путевой в Такском' : 'Оформление путевого листа…',
+        value: 'Смена открыта (создание ЭПЛ)',
         time: formatDateMsk(pendingEpl.createdAt),
         hint: isTaxcomOnly
-          ? 'Официальный документ и QR Такском появятся после обработки (обычно несколько минут).'
-          : 'Черновой PDF может появиться сразу; официальный ЭПЛ и QR Такском — после программы на ПК и ГИС.'
+          ? 'Смена уже открыта. Официальный документ и QR Такском появятся после обработки (обычно несколько минут).'
+          : 'Смена уже открыта. Ждём печать ЭПЛ и выпуск QR.'
       };
     }
-    return { status: 'inactive', value: 'Нет открытого путевого — смена не начата', time: null };
+    if (shiftRequestSentAt) {
+      return {
+        status: 'creating',
+        value: 'Смена на рассмотрении',
+        time: formatDateMsk(shiftRequestSentAt),
+        hint: 'Менеджер/директор обрабатывает запрос. После открытия смены появится путевой лист.'
+      };
+    }
+    return {
+      status: 'inactive',
+      value: 'Нет открытого путевого — смена не начата',
+      time: null,
+      hint: driver?.canCreateEpl === false
+        ? 'В этом парке смену открывает менеджер/директор. Отправьте заявку кнопкой ниже.'
+        : null
+    };
   };
 
   // Приветствие с временем суток (по МСК)
@@ -571,6 +672,18 @@ export default function DriverPortal() {
 
   const shiftStatus = getShiftStatus();
   const unreadCount = notifications.filter((n) => !n.readAt).length;
+  const shiftFlowSteps = [
+    { key: 'request', label: 'Смена на рассмотрении', hint: 'Заявка отправлена менеджеру/директору' },
+    { key: 'forming', label: 'Смена открыта (создание ЭПЛ)', hint: 'ЭПЛ печатается и выпускается в Минтранс' },
+    { key: 'ready', label: 'PDF Минтранс получены', hint: 'Документы получены, смена активна' },
+  ];
+  const shiftFlowCurrent = activeShift
+    ? 'ready'
+    : pendingEpl
+      ? 'forming'
+      : shiftRequestSentAt
+        ? 'request'
+        : null;
 
   if (loading) {
     return (
@@ -868,6 +981,7 @@ export default function DriverPortal() {
               onStatusClick={() => {
                 if (activeShift) navigate(`/driver/epl/${activeShift.id}`);
                 else if (pendingEpl) navigate(`/driver/epl/${pendingEpl.id}`);
+                else if (driver?.canCreateEpl === false) handleRequestShiftOpen();
                 else openCreateEplModal();
               }}
               isShiftActive={!!(activeShift || pendingEpl)}
@@ -875,6 +989,49 @@ export default function DriverPortal() {
               photoControlStatus={photoControlStatus}
               onPhotoControlClick={() => navigate('/driver/photo-control')}
             />
+            {shiftFlowCurrent && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`rounded-2xl border p-4 ${
+                  sceneNight
+                    ? 'border-slate-600/60 bg-slate-900/75 text-slate-100'
+                    : 'border-slate-200 bg-white/90 text-slate-900'
+                }`}
+              >
+                <p className={`text-sm font-semibold ${sceneNight ? 'text-slate-100' : 'text-slate-800'}`}>
+                  Этап открытия смены
+                </p>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {shiftFlowSteps.map((step, idx) => {
+                    const active = step.key === shiftFlowCurrent;
+                    const done =
+                      shiftFlowCurrent === 'ready'
+                        ? (step.key === 'request' || step.key === 'forming')
+                        : (shiftFlowCurrent === 'forming' && step.key === 'request');
+                    return (
+                      <div
+                        key={step.key}
+                        className={`rounded-xl border px-3 py-2 ${
+                          active
+                            ? 'border-teal-500 bg-teal-500/10'
+                            : done
+                              ? (sceneNight ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-emerald-200 bg-emerald-50')
+                              : (sceneNight ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-slate-50')
+                        }`}
+                      >
+                        <p className={`text-xs font-semibold ${active ? 'text-teal-300' : sceneNight ? 'text-slate-300' : 'text-slate-700'}`}>
+                          {idx + 1}. {step.label}
+                        </p>
+                        <p className={`mt-1 text-[11px] ${sceneNight ? 'text-slate-400' : 'text-slate-500'}`}>
+                          {step.hint}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
             </div>
 
             {/* Эвакуатор */}
@@ -999,16 +1156,26 @@ export default function DriverPortal() {
                 <motion.button
                   whileHover={{ scale: 1.02, y: -2 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={openCreateEplModal}
-                  disabled={!driver.carId || balance < (driver?.eplPrice ?? 25)}
+                  onClick={driver?.canCreateEpl === false ? handleRequestShiftOpen : openCreateEplModal}
+                  disabled={
+                    driver?.canCreateEpl === false
+                      ? requestingShiftOpen
+                      : (!driver.carId || balance < (driver?.eplPrice ?? 25))
+                  }
                   className={`w-full py-4 px-6 rounded-2xl font-semibold flex items-center justify-center gap-3 transition shadow-lg ${
-                    driver.carId && balance >= (driver?.eplPrice ?? 25)
+                    (driver?.canCreateEpl === false)
+                      ? 'bg-gradient-to-r from-orange-500 to-orange-700 text-white hover:from-orange-600 hover:to-orange-800'
+                      : (driver.carId && balance >= (driver?.eplPrice ?? 25))
                       ? 'bg-gradient-to-r from-teal-600 to-teal-800 text-white hover:from-teal-700 hover:to-teal-900'
                       : 'bg-slate-200 text-slate-500 cursor-not-allowed'
                   }`}
                 >
                   <FileText className="w-5 h-5" />
-                  <span>Новый путевой лист</span>
+                  <span>
+                    {driver?.canCreateEpl === false
+                      ? (requestingShiftOpen ? 'Отправляем заявку...' : 'Запросить открытие смены')
+                      : 'Новый путевой лист'}
+                  </span>
                 </motion.button>
               )}
             </motion.div>

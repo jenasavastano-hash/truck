@@ -155,6 +155,51 @@ export const getPermissions = async (parkId) => {
   return res.data;
 };
 
+// === SHIFT OPEN REQUESTS (manager/director) ===
+export const getShiftOpenRequests = async (params = {}) => {
+  const res = await axios.get(`${getApiBase()}/shift-open-requests`, {
+    params,
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
+export const approveShiftOpenRequest = async (requestId, payload = {}) => {
+  const res = await axios.post(`${getApiBase()}/shift-open-requests/${requestId}/approve`, payload, {
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
+export const rejectShiftOpenRequest = async (requestId, payload = {}) => {
+  const res = await axios.post(`${getApiBase()}/shift-open-requests/${requestId}/reject`, payload, {
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
+export const getShiftPlans = async (params = {}) => {
+  const res = await axios.get(`${getApiBase()}/shift-plans`, {
+    params,
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
+export const upsertShiftPlan = async (payload = {}) => {
+  const res = await axios.post(`${getApiBase()}/shift-plans`, payload, {
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
+export const cancelShiftPlan = async (planId) => {
+  const res = await axios.post(`${getApiBase()}/shift-plans/${planId}/cancel`, {}, {
+    headers: getAuthHeader(),
+  });
+  return res.data;
+};
+
 // Действия по водителям (если есть доступ)
 export const driverTopupBalance = async (userId, amount, amountType = 'real', parkId) => {
   const res = await axios.post(`${getApiBase()}/drivers/${userId}/balance`, { amount, amountType }, {

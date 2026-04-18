@@ -37,12 +37,14 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
   const [unlinking, setUnlinking] = useState(false);
   const [bindingCar, setBindingCar] = useState(false);
   const [carSearchQuery, setCarSearchQuery] = useState('');
+  const [eplAccessOverride, setEplAccessOverride] = useState('default');
 
   const [pwdNew, setPwdNew] = useState('');
   const [pwdConfirm, setPwdConfirm] = useState('');
   const [pwdShow, setPwdShow] = useState(false);
   const [pwdMustChangeOnLogin, setPwdMustChangeOnLogin] = useState(false);
   const [pwdSaving, setPwdSaving] = useState(false);
+  const requestParkId = parkId || driver?.parkId || null;
 
   const handleDelete = async () => {
     if (!driver) return;
@@ -77,7 +79,7 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
         : role === 'director'
           ? `/director/drivers/${driver.id || driver.userId}`
           : `/admin/drivers/${driver.userId}/car`;
-      await api.put(url, { carId: null });
+      await api.put(url, { carId: null }, (role === 'manager' || role === 'director') && requestParkId ? { params: { parkId: requestParkId } } : undefined);
       alert('✅ Автомобиль отвязан');
       if (onSave) onSave();
     } catch (e) {
@@ -103,7 +105,7 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
           : role === 'director'
             ? `/director/drivers/${driver.id || driver.userId}`
             : `/admin/drivers/${driver.userId}/car`;
-        await api.put(url, { carId: newCar.id });
+        await api.put(url, { carId: newCar.id }, (role === 'manager' || role === 'director') && requestParkId ? { params: { parkId: requestParkId } } : undefined);
         alert('✅ Автомобиль создан и привязан');
       }
       setShowAddCarModal(false);
@@ -125,7 +127,7 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
         : role === 'director'
           ? `/director/drivers/${driver.id || driver.userId}`
           : `/admin/drivers/${driver.userId}/car`;
-      await api.put(url, { carId: carToBind.id });
+      await api.put(url, { carId: carToBind.id }, (role === 'manager' || role === 'director') && requestParkId ? { params: { parkId: requestParkId } } : undefined);
       alert('✅ Автомобиль привязан');
       if (onSave) onSave();
     } catch (e) {
@@ -162,6 +164,13 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
       setPwdShow(false);
       setPwdMustChangeOnLogin(false);
       setDriverStats(null);
+      setEplAccessOverride(
+        driver.eplAccessOverride === 'force_allow'
+          ? 'force_allow'
+          : driver.eplAccessOverride === 'force_deny'
+            ? 'force_deny'
+            : 'default'
+      );
     }
   }, [isOpen, driver]);
 
@@ -252,10 +261,14 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
           licenseDate: formData.licenseDate || null,
           personnelNumber: formData.personnelNumber,
           inn: formData.inn,
-          snils: formData.snils || null
+          snils: formData.snils || null,
+          eplAccessOverride
         });
       } else {
-        await api.put(`/admin/drivers/${driverId}/takskom`, formData);
+        await api.put(`/admin/drivers/${driverId}/takskom`, {
+          ...formData,
+          eplAccessOverride
+        });
       }
       alert('✅ Данные водителя для Такском сохранены');
       if (onSave) onSave();
@@ -352,6 +365,36 @@ export default function DriverSettingsModal({ driver, cars, parkId, drivers, isO
             <form onSubmit={handleSave} className="space-y-4 sm:space-y-6">
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs sm:text-sm text-amber-800">
                 <strong>Для ЭПЛ/Такском:</strong> обязательны фамилия, имя, серия/номер ВУ. Рекомендуется: отчество, дата ВУ, ИНН, табельный номер.
+              </div>
+              <div className="bg-slate-50 rounded-lg sm:rounded-xl p-3 sm:p-4 border border-slate-200">
+                <label className="block text-xs sm:text-sm font-semibold text-slate-700 mb-2">Доступ к созданию ЭПЛ (персонально)</label>
+                <select
+                  value={eplAccessOverride}
+                  onChange={(e) => setEplAccessOverride(e.target.value)}
+                  className="w-full px-3 sm:px-4 py-2.5 text-sm sm:text-base border-2 border-slate-300 rounded-lg sm:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-teal-500 transition"
+                >
+                  <option value="default">Как в настройках парка</option>
+                  <option value="force_allow">Всегда разрешить водителю создавать ЭПЛ</option>
+                  <option value="force_deny">Запретить создание ЭПЛ водителю</option>
+                </select>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                    eplAccessOverride === 'force_allow'
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : eplAccessOverride === 'force_deny'
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-slate-100 text-slate-700'
+                  }`}>
+                    {eplAccessOverride === 'force_allow'
+                      ? 'Сейчас: всегда разрешено'
+                      : eplAccessOverride === 'force_deny'
+                        ? 'Сейчас: всегда запрещено'
+                        : 'Сейчас: режим парка'}
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    Точечное исключение для конкретного водителя.
+                  </span>
+                </div>
               </div>
               {/* ФИО */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">

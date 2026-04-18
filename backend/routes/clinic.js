@@ -254,7 +254,8 @@ router.get('/pending-creation', (req, res) => {
           db.all(
             `SELECT parkId, role, fullName, position, taxcomLogin, taxcomPassword
              FROM park_staff
-             WHERE parkId IN (${parkPlaceholders})`,
+             WHERE parkId IN (${parkPlaceholders}) AND COALESCE(isActive,1) = 1
+             ORDER BY COALESCE(priority,0) DESC, id DESC`,
             parkIds,
             (err3, staffRows) => {
               if (err3) {
@@ -267,6 +268,7 @@ router.get('/pending-creation', (req, res) => {
               (staffRows || []).forEach((s) => {
                 const key = s.role === 'technic' ? 'technic' : s.role;
                 if (staffByPark[s.parkId]) {
+                  if (staffByPark[s.parkId][key]) return;
                   staffByPark[s.parkId][key] = {
                     fullName: s.fullName,
                     position: s.position,
@@ -314,6 +316,17 @@ router.get('/pending-creation', (req, res) => {
                     const t = i.titulStatus || {};
                     const allSigned = t.t1 === 'signed' && t.t2 === 'signed' && t.t3 === 'signed' && t.t4 === 'signed';
                     return !allSigned;
+                  });
+
+                  items.forEach((i) => {
+                    if (i.freightAddressEntryMode !== 'driver') return;
+                    const f = i.freightAddresses || {};
+                    const unloadCount = Array.isArray(f.unloadAddresses) ? f.unloadAddresses.length : 0;
+                    if (!f.originAddress || !f.loadAddress || unloadCount === 0) {
+                      console.warn(
+                        `[Clinic] Freight data incomplete for eplId=${i.eplId}: origin=${!!f.originAddress}, load=${!!f.loadAddress}, unloadCount=${unloadCount}`
+                      );
+                    }
                   });
 
                   return res.json({ items });
@@ -945,7 +958,8 @@ router.get('/pending-completion', (req, res) => {
           db.all(
             `SELECT parkId, role, fullName, firstName, lastName, secondName, position, taxcomLogin, taxcomPassword
              FROM park_staff
-             WHERE parkId IN (${parkPlaceholders})`,
+             WHERE parkId IN (${parkPlaceholders}) AND COALESCE(isActive,1) = 1
+             ORDER BY COALESCE(priority,0) DESC, id DESC`,
             parkIds,
             (err3, staffRows) => {
               if (err3) {
@@ -958,6 +972,7 @@ router.get('/pending-completion', (req, res) => {
               (staffRows || []).forEach((s) => {
                 const key = s.role === 'technic' ? 'technic' : s.role === 'medic' ? 'medic' : s.role === 'dispatcher' ? 'dispatcher' : null;
                 if (key && staffByPark[s.parkId]) {
+                  if (staffByPark[s.parkId][key]) return;
                   staffByPark[s.parkId][key] = {
                     fullName: s.fullName,
                     firstName: s.firstName,
