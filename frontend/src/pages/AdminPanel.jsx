@@ -167,6 +167,8 @@ export default function AdminPanel() {
       sessionStorage.setItem('adminImpersonationBackup', JSON.stringify(backup));
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
+      // Важно: фиксируем выбранный парк, чтобы директорский кабинет открылся именно в нём.
+      localStorage.setItem('director_selected_park_id', String(pid));
       window.location.href = '/director';
     } catch (e) {
       alert(e.response?.data?.error || e.message || 'Ошибка входа');

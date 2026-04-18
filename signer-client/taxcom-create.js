@@ -646,6 +646,63 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
       return toggled;
     };
 
+    const clickRouteMatchCheckbox = async (forIds, textHints, label) => {
+      const ids = Array.isArray(forIds) ? forIds.filter(Boolean) : [];
+      const hints = Array.isArray(textHints) ? textHints.map((s) => String(s || '').toLowerCase()).filter(Boolean) : [];
+      const clicked = await page.evaluate(({ candidateIds, hintWords }) => {
+        const clickLabelFor = (forId) => {
+          const lb = document.querySelector(`label[for="${forId}"]`);
+          if (!lb) return false;
+          let cb = document.getElementById(forId);
+          if (!cb || cb.type !== 'checkbox') cb = lb.querySelector('input[type="checkbox"]');
+          if (!cb && lb.previousElementSibling && lb.previousElementSibling.matches('input[type="checkbox"]')) cb = lb.previousElementSibling;
+          if (!cb || cb.type !== 'checkbox') return false;
+          if (!cb.checked) cb.click();
+          return !!cb.checked;
+        };
+
+        for (const id of candidateIds) {
+          if (clickLabelFor(id)) return id;
+        }
+
+        if (hintWords.length > 0) {
+          const labels = Array.from(document.querySelectorAll('label[for]'));
+          for (const lb of labels) {
+            const txt = String(lb.textContent || '').toLowerCase().replace(/\s+/g, ' ');
+            const ok = hintWords.every((w) => txt.includes(w));
+            if (!ok) continue;
+            const id = String(lb.getAttribute('for') || '').trim();
+            if (!id) continue;
+            if (clickLabelFor(id)) return id;
+          }
+        }
+        return '';
+      }, { candidateIds: ids, hintWords: hints }).catch(() => '');
+      if (clicked) {
+        await page.waitForTimeout(120);
+        console.log(`[Taxcom] ✓ ${label}: включен checkbox соответствия (${clicked})`);
+        return true;
+      }
+      return false;
+    };
+
+    const ensureCommercialSegmentExists = async (kind, index) => {
+      const idx = Number(index);
+      if (!Number.isInteger(idx) || idx < 0) return false;
+      const mode = kind === 'load' ? 'load' : 'unlo';
+      const inputId = mode === 'load' ? `COMMERCIAL_ADDRESS_INFO_LOAD_${idx}` : `COMMERCIAL_ADDRESS_INFO_UNLO_${idx}`;
+      const existsNow = await page.locator(`#${inputId}, input[id="${inputId}"]`).first().isVisible().catch(() => false);
+      if (existsNow) return true;
+      for (let i = 0; i < 4; i++) {
+        const added = await clickAddPointBtn();
+        if (!added) break;
+        await page.waitForTimeout(260);
+        const exists = await page.locator(`#${inputId}, input[id="${inputId}"]`).first().isVisible().catch(() => false);
+        if (exists) return true;
+      }
+      return false;
+    };
+
     const fillCommercialRouteFieldByIndex = async (kind, index, text, label) => {
       const v = String(text || '').trim();
       if (!v) return false;
@@ -654,6 +711,9 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
       const mode = kind === 'load' ? 'load' : 'unlo';
       const checkboxFor = mode === 'load' ? `commercial_type_load_${idx}` : `commercial_type_unlo_${idx}`;
       const inputId = mode === 'load' ? `COMMERCIAL_ADDRESS_INFO_LOAD_${idx}` : `COMMERCIAL_ADDRESS_INFO_UNLO_${idx}`;
+      if (idx > 0) {
+        await ensureCommercialSegmentExists(mode, idx).catch(() => {});
+      }
       await clickFullAddressByForId(checkboxFor, label).catch(() => {});
       const loc = page.locator(`#${inputId}, input[id="${inputId}"]`).first();
       if ((await loc.count()) === 0 || !(await loc.isVisible().catch(() => false))) return false;
@@ -736,6 +796,16 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
     };
 
     const clickAddPointBtn = async (pointInput) => {
+      const clickTaxcomCommercialLink = async () => {
+        const direct = page.locator('a.btn.btn-green[onclick*="addCommercial"], a[onclick*="addCommercial"]').first();
+        if ((await direct.count()) > 0 && (await direct.isVisible().catch(() => false))) {
+          await direct.click({ timeout: 3000 }).catch(() => direct.click({ timeout: 3000, force: true }).catch(() => {}));
+          await page.waitForTimeout(350);
+          return true;
+        }
+        return false;
+      };
+      if (await clickTaxcomCommercialLink()) return true;
       if (pointInput) {
         const clickedNear = await pointInput.evaluate((el) => {
           let cur = el;
@@ -782,6 +852,7 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
         await page.waitForTimeout(350);
         return true;
       }
+      if (await clickTaxcomCommercialLink()) return true;
       return false;
     };
 
@@ -838,6 +909,13 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
 
     // Приоритет для погрузки/выгрузки: единый блок с кнопкой «Добавить».
     if (load) {
+      if (origin && String(origin).trim() && String(load).trim() && String(origin).trim() === String(load).trim()) {
+        await clickRouteMatchCheckbox(
+          ['load_load_0', 'commercial_load_load_0'],
+          ['соответствует', 'адресу отправления'],
+          'Погрузка',
+        ).catch(() => {});
+      }
       let viaRouteField = await fillCommercialRouteFieldByIndex('load', 0, load, 'Погрузка');
       if (!viaRouteField) viaRouteField = await fillPointViaRouteField(load, 'Погрузка');
       if (viaRouteField) {
@@ -857,6 +935,22 @@ async function fillFreightAddressesOnTaxcomWaybillForm(page, item, env) {
       const unloadText = unloads[seg];
       if (seg > 0) {
         await clickAddPointBtn().catch(() => {});
+      }
+      const prevUnload = seg > 0 ? String(unloads[seg - 1] || '').trim() : '';
+      const curUnload = String(unloadText || '').trim();
+      const loadTrimmed = String(load || '').trim();
+      if (curUnload && loadTrimmed && curUnload === loadTrimmed) {
+        await clickRouteMatchCheckbox(
+          [`unlo_load_${seg}`, `commercial_unlo_load_${seg}`],
+          ['соответствует', 'адресу погрузки'],
+          `Выгрузка сегмент ${seg + 1}`,
+        ).catch(() => {});
+      } else if (curUnload && prevUnload && curUnload === prevUnload) {
+        await clickRouteMatchCheckbox(
+          [`unlo_unlo_${seg}`, `commercial_unlo_unlo_${seg}`],
+          ['соответствует', 'предыдущему адресу выгрузки'],
+          `Выгрузка сегмент ${seg + 1}`,
+        ).catch(() => {});
       }
       let viaRouteField = await fillCommercialRouteFieldByIndex('unlo', seg, unloadText, `Выгрузка сегмент ${seg + 1}`);
       if (!viaRouteField) viaRouteField = await fillPointViaRouteField(unloadText, `Выгрузка сегмент ${seg + 1}`);
@@ -2281,7 +2375,8 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
     const rawOgrnip     = (ow?.ogrnip || '').trim();
     const fallbackOwnerName = String(driver.ownerName || parkName || '').trim();
     const issName       = (ow?.name || fallbackOwnerName).trim();
-    const issKpp        = (ow?.kpp || driver.parkKpp || '').trim();
+    const defaultIssuePersonKpp = String(env.TAXCOM_DEFAULT_ISSUE_PERSON_KPP || env.DEFAULT_ISSUE_PERSON_KPP || '010000000').trim();
+    const issKpp        = (ow?.kpp || driver.parkKpp || defaultIssuePersonKpp || '').trim();
     const issPhone      = (ow?.phone || driver.parkPhone || '').trim();
     const issEmail      = (ow?.email || driver.parkEmail || '').trim();
     const issIndex      = (ow?.postalIndex || driver.parkPostalIndex || '').trim();
@@ -2388,18 +2483,36 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         if (!v) return false;
         const field = page.locator(selectors).first();
         if ((await field.count()) === 0 || !(await field.isVisible().catch(() => false))) return false;
+        await field.scrollIntoViewIfNeeded().catch(() => {});
         await field.click({ timeout: 1500 }).catch(() => {});
+        await field.evaluate((el) => {
+          el.removeAttribute('readonly');
+          el.removeAttribute('disabled');
+        }).catch(() => {});
         await field.fill('').catch(() => {});
         await field.type(v, { delay: 20 }).catch(async () => {
           await field.fill(v).catch(() => {});
         });
+        let finalVal = String((await field.inputValue().catch(() => '')) || '').trim();
+        if (!finalVal || (String(label).includes('КПП') && finalVal.length !== 9)) {
+          await field.evaluate((el, value) => {
+            el.focus();
+            el.value = '';
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+          }, v).catch(() => {});
+          await page.waitForTimeout(140);
+          finalVal = String((await field.inputValue().catch(() => '')) || '').trim();
+        }
         await field.evaluate((el) => {
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
           el.dispatchEvent(new Event('blur', { bubbles: true }));
         }).catch(() => {});
         await page.waitForTimeout(120);
-        const finalVal = String((await field.inputValue().catch(() => '')) || '').trim();
         if (!finalVal) return false;
         console.log(`[Taxcom] ✓ Лицо оформившее: ${label} =`, finalVal);
         return true;
@@ -2453,8 +2566,12 @@ async function createEplInTaxcom(item, env, reuse, reportTitulProgress) {
         if (issOgrn && issOgrn.length >= 13) {
           await fillIssuePersonField('#issue_person_ogrn, #ISSUE_PERSON_OGRN, input[name="ISSUE_PERSON_OGRN"], input[name="issue_person_ogrn"]', issOgrn, 'ОГРН (ЮЛ)');
         }
-        if (issKpp) {
-          const kppOk = await fillIssuePersonField('#issue_person_kpp, #ISSUE_PERSON_KPP, input[name="ISSUE_PERSON_KPP"], input[name="issue_person_kpp"]', issKpp, 'КПП (ЮЛ)');
+        const kppToFill = String(issKpp || defaultIssuePersonKpp || '').trim();
+        if (kppToFill) {
+          if (!issKpp) {
+            console.warn(`[Taxcom] [ШАГ 4] ⚠ У владельца/парка не найден КПП. Использую fallback КПП=${kppToFill}`);
+          }
+          const kppOk = await fillIssuePersonField('#issue_person_kpp, #ISSUE_PERSON_KPP, input[name="ISSUE_PERSON_KPP"], input[name="issue_person_kpp"]', kppToFill, 'КПП (ЮЛ)');
           if (!kppOk) {
             console.warn('[Taxcom] ⚠ Лицо оформившее: поле КПП не найдено/не заполнено, проверь верстку блока ISSUE_PERSON');
           }

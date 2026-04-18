@@ -192,6 +192,14 @@ export default function ManagerPanel({ panelRole = 'manager' }) {
   const [operationsNight, setOperationsNight] = useState(readOperationsSceneNight);
 
   useEffect(() => {
+    if (!isDirectorPanel) return;
+    const tokenParkId = Number.parseInt(user?.parkId, 10);
+    if (!Number.isFinite(tokenParkId) || tokenParkId <= 0) return;
+    setSelectedParkId(tokenParkId);
+    localStorage.setItem(getParkKey(panelRole), String(tokenParkId));
+  }, [isDirectorPanel, user?.parkId, panelRole]);
+
+  useEffect(() => {
     try {
       localStorage.setItem('freight_operations_scene', operationsNight ? 'night' : 'day');
     } catch (_) {}
