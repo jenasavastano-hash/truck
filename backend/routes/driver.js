@@ -1427,7 +1427,7 @@ router.post('/epl/create', authenticateToken, authorizeRole('driver'), async (re
        FROM users u
        JOIN drivers d ON u.id = d.userId
        LEFT JOIN cars c ON d.carId = c.id AND c.parkId = d.parkId
-       LEFT JOIN parks p ON u.parkId = p.id
+      LEFT JOIN parks p ON d.parkId = p.id
        LEFT JOIN park_owners po ON po.id = c.ownerId
        WHERE u.id = ?`,
       [req.user.userId],
