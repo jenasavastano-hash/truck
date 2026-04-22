@@ -7,7 +7,14 @@ import ChangeCredentials from './pages/ChangeCredentials';
 import ProtectedRoute from './components/ProtectedRoute';
 import HomeRedirect from './components/HomeRedirect';
 import Home from './pages/Home';
+import Landing from './pages/Landing';
 import Login from './pages/Login';
+import EntryHub from './pages/EntryHub';
+import EntryLoginChoice from './pages/EntryLoginChoice';
+import EntryRegistrationChoice from './pages/EntryRegistrationChoice';
+import EntryRegistrationForm from './pages/EntryRegistrationForm';
+import EntryPlaceholder from './pages/EntryPlaceholder';
+import CrmLeadsPage from './pages/CrmLeadsPage';
 import AdminPanel from './pages/AdminPanel';
 import ManagerPanel from './pages/ManagerPanel';
 import DirectorPanel from './pages/DirectorPanel';
@@ -30,12 +37,17 @@ function ConditionalHeader() {
   const location = useLocation();
   const { user, loading } = useAuth();
 
-  if (location.pathname === '/login') {
+  if (location.pathname === '/login' || location.pathname === '/') {
     return null;
   }
 
   // Если еще идет загрузка, не показываем хедер
   if (loading) {
+    return null;
+  }
+
+  // Для неавторизованных пользователей не рендерим пустой хедер.
+  if (!user) {
     return null;
   }
 
@@ -66,7 +78,21 @@ function AppContent() {
       <ConditionalHeader />
       <main className={loginRoute ? 'login-route-main' : undefined}>
         <Routes>
-            <Route path="/" element={<HomeRedirect />} />
+            <Route path="/" element={<Landing />} />
+            <Route path="/entry" element={<EntryHub />} />
+            <Route path="/entry/login" element={<EntryLoginChoice />} />
+            <Route path="/entry/register" element={<EntryRegistrationChoice />} />
+            <Route path="/entry/register/:typeId" element={<EntryRegistrationForm />} />
+            <Route path="/entry/placeholder/:target" element={<EntryPlaceholder />} />
+            <Route
+              path="/crm/leads"
+              element={
+                <ProtectedRoute allowedRoles={['admin', 'manager', 'director']}>
+                  <CrmLeadsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/start" element={<HomeRedirect />} />
             <Route path="/login" element={<Login />} />
             <Route path="/home" element={<Home />} />
             <Route path="/change-credentials" element={<ChangeCredentials />} />

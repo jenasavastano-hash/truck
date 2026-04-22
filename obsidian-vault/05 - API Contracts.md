@@ -29,6 +29,7 @@
 | `/api/evacuator` | `evacuator.js` | Кабинет эвакуатора |
 | `/api/commissioner` | `commissioner.js` | Кабинет комиссара |
 | `/api/signer` | `signer.js` | Подписание титулов (внешний поток) |
+| `/api/crm` | `crm-leads.js` | Публичные лиды обратного звонка + обработка менеджером |
 
 Подробнее по значениям `epl.status` и агрегированным статусам UI — [[11 - Glossary EPL Statuses]].
 
@@ -157,6 +158,14 @@ Takskom: `/takskom/check`, `/takskom/carparks`, `/takskom/link-carpark`.
 ## Worker (`/api/worker`)
 
 - `POST /epl/:id/create-attempt-failed` — отметка неудачной попытки создания (воркер/клиника).
+
+---
+
+## CRM (`/api/crm`)
+
+- `POST /callback` — публичная заявка с лендинга (имя, контакт, компания, тип бизнеса, комментарий, sourcePage).
+- `GET /callback` — список лидов для ролей `admin|manager|director`.
+- `PATCH /callback/:id` — обновление статуса отработки (`new|in_progress|done|rejected`) и `callResult`.
 
 ---
 

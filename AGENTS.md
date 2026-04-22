@@ -25,4 +25,5 @@
   - роуты: `backend/routes/*`
   - бизнес-логика: `backend/services/*`
   - утилиты: `backend/utils/*`
+- Деплой фронта (Vite `dist`, nginx): **`deploy/DEPLOY-LANDING.md`**
 

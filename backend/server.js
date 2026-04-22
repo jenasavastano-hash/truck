@@ -18,6 +18,7 @@ const commissionerRoutes = require('./routes/commissioner');
 const signerRoutes = require('./routes/signer');
 const clinicRoutes = require('./routes/clinic');
 const directorRoutes = require('./routes/director');
+const crmLeadsRoutes = require('./routes/crm-leads');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -85,6 +86,7 @@ app.use('/api/signer', signerRoutes);
 app.use('/api/worker', workerRoutes);
 app.use('/api/clinic', clinicRoutes);
 app.use('/api/director', directorRoutes);
+app.use('/api/crm', crmLeadsRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

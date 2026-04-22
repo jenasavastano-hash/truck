@@ -228,6 +228,137 @@ button:disabled {
   animation: cartoon-spin-slow 18s linear infinite;
 }
 
+@keyframes landing-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes landing-cta-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 8px 20px rgba(13, 148, 136, 0.22),
+      0 0 0 rgba(45, 212, 191, 0);
+  }
+  50% {
+    box-shadow:
+      0 10px 26px rgba(13, 148, 136, 0.3),
+      0 0 14px rgba(45, 212, 191, 0.22);
+  }
+}
+
+.landing-shimmer-text {
+  background: linear-gradient(90deg, #0f766e, #14b8a6, #0d9488, #115e59);
+  background-size: 220% 220%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: landing-shimmer 6s ease-in-out infinite;
+}
+
+.landing-cta {
+  background: linear-gradient(135deg, #14b8a6, #2dd4bf);
+  transition:
+    transform 0.2s ease,
+    filter 0.2s ease,
+    box-shadow 0.2s ease;
+  animation: landing-cta-glow 2.8s ease-in-out infinite;
+}
+
+.landing-cta:hover {
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+
+/* Маркетинговый фон: мягкое «сияние», сетка и блик (отключается при reduced-motion) */
+.marketing-backdrop-root {
+  isolation: isolate;
+}
+
+.marketing-backdrop-aurora {
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(ellipse 75% 55% at 18% 12%, rgba(45, 212, 191, 0.2), transparent 52%),
+    radial-gradient(ellipse 65% 50% at 88% 22%, rgba(20, 184, 166, 0.14), transparent 48%),
+    radial-gradient(ellipse 55% 45% at 48% 92%, rgba(15, 118, 110, 0.1), transparent 55%);
+  animation: marketing-backdrop-aurora 22s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+.marketing-backdrop-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(100, 116, 139, 0.065) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(100, 116, 139, 0.065) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: linear-gradient(to bottom, black 0%, black 55%, transparent 100%);
+  animation: marketing-backdrop-grid-pan 72s linear infinite;
+}
+
+.marketing-backdrop-shine {
+  position: absolute;
+  inset: -50%;
+  background: linear-gradient(
+    118deg,
+    transparent 42%,
+    rgba(255, 255, 255, 0.14) 50%,
+    transparent 58%
+  );
+  background-size: 180% 180%;
+  animation: marketing-backdrop-shine 14s ease-in-out infinite;
+  opacity: 0.55;
+  mix-blend-mode: overlay;
+}
+
+@keyframes marketing-backdrop-aurora {
+  0% {
+    transform: translate(0, 0) scale(1);
+  }
+  100% {
+    transform: translate(3%, 2%) scale(1.04);
+  }
+}
+
+@keyframes marketing-backdrop-grid-pan {
+  0% {
+    background-position: 0 0, 0 0;
+  }
+  100% {
+    background-position: 40px 40px, 40px 40px;
+  }
+}
+
+@keyframes marketing-backdrop-shine {
+  0%,
+  100% {
+    background-position: 120% 40%;
+  }
+  50% {
+    background-position: -20% 60%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketing-backdrop-aurora,
+  .marketing-backdrop-grid,
+  .marketing-backdrop-shine {
+    animation: none;
+  }
+
+  .marketing-backdrop-shine {
+    opacity: 0.2;
+  }
+}
+
 table {
   border-collapse: collapse;
 }

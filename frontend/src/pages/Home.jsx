@@ -179,6 +179,15 @@ export default function Home() {
       path: '/commissioner',
       roles: ['commissioner'],
     },
+    {
+      id: 'crm-leads',
+      label: 'CRM заявки на звонок',
+      description: 'Лиды с лендинга и статусы отработки звонков',
+      icon: ClipboardList,
+      color: 'blue',
+      path: '/crm/leads',
+      roles: ['admin', 'manager', 'director'],
+    },
   ].filter(
     (link) =>
       (!link.roles || link.roles.includes(user?.role)) &&

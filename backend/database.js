@@ -1492,6 +1492,27 @@ const runMigrations = (callback) => {
       if (err && !/duplicate column/i.test(err.message)) console.error('notifications eplId migration:', err);
     });
 
+    // CRM: лиды обратного звонка с лендинга (обрабатываются менеджером)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS crm_callback_leads (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        contact TEXT NOT NULL,
+        company TEXT,
+        businessType TEXT,
+        comment TEXT,
+        sourcePage TEXT,
+        status TEXT DEFAULT 'new' CHECK(status IN ('new', 'in_progress', 'done', 'rejected')),
+        callResult TEXT,
+        assignedManagerUserId INTEGER,
+        calledAt DATETIME,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(assignedManagerUserId) REFERENCES users(id)
+      )
+    `);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_crm_callback_leads_status_created ON crm_callback_leads(status, createdAt DESC)`);
+
     // Шаблоны рассылок (админ)
     db.run(`
       CREATE TABLE IF NOT EXISTS admin_broadcast_templates (
